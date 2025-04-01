@@ -2,13 +2,13 @@
 
 from abc import ABC, abstractmethod
 
-from openai import BaseModel
-
 from agent.agent import Agent
 from agent.schema import FlowInput
+from agent.tool.assign_agent_tool import AssignAgent
+from agent.tool.terminate_tool import Terminate
 
 
-class BaseFlow(BaseModel, ABC):
+class BaseFlow(ABC):
     def __init__(self, agents: dict[str, Agent]):
         """
         Args:
@@ -17,11 +17,16 @@ class BaseFlow(BaseModel, ABC):
         ...    "primary": Agent() # primary agent
         ...    "other": Agent(), # other agents
         ... }
-        >>> flow = AgentFlow(agents)
+        >>> flow = BaseFlow(agents)
         """
         if "primary" not in agents:
             raise ValueError("Primary agent is required")
         self.agents = agents
+        for agent in self.agents.values():
+            # add terminate tool to all agents
+            agent.tools.append(Terminate())
+            # add assign agent tool to all agents
+            agent.tools.append(AssignAgent())
 
     @abstractmethod
     def run(self, input: FlowInput):

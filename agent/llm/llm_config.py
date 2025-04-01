@@ -1,4 +1,3 @@
-
 from pydantic import Field
 from typing import Literal
 from openai import BaseModel
