@@ -1,27 +1,26 @@
+import json
 from abc import ABC, abstractmethod
 from pydantic import Field
 from typing import List, Literal, Union, TYPE_CHECKING, Any, Dict
 from openai import BaseModel
 
-# 移除循环导入
-# from agent.agent import Agent
-
 # 如果在类型检查时，导入 Agent 类型
 if TYPE_CHECKING:
-    from agent.agent import Agent
+    from mrai.agent.agent import Agent
 
 
 class Message(BaseModel):
 
-    role: Literal["system", "user", "assistant", "tool"] = Field(..., description="The role of the message")
+    role: Literal["system", "user", "assistant", "tool", "tool_call"] = Field(..., description="The role of the message")
     content: str = Field(..., description="The content of the message")
-
+    tool_calls: list["ToolCall"] = Field(default=[], description="The tool calls of the message")
 
 
     def to_dict(self, **kwargs):
         return {
             "role": self.role,
-            "content": self.content
+            "content": self.content,
+            "tool_calls": [tool_call.to_dict() for tool_call in self.tool_calls] if self.tool_calls else None
         }
 
 class FlowInput(BaseModel):
@@ -103,11 +102,25 @@ class Tool(BaseModel, ABC):
 
 class ToolCall(BaseModel):
     """Represents a tool/function call in a message"""
+    
+    class ToolCallFunction(BaseModel):
+        name: str = Field(..., description="The name of the tool call function")
+        arguments: dict = Field(default={}, description="The arguments of the tool call function")
 
     id: str = Field(..., description="The id of the tool call")
     type: str = Field(..., description="The type of the tool call")
-    function: Tool = Field(..., description="The tool of the tool call")
-    arguments: dict = Field(default={}, description="The arguments of the tool call")
+    function: ToolCallFunction = Field(..., description="The tool of the tool call")
+    tool: Tool = Field(..., description="The tool of the tool call")
+    
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "type": self.type,
+            "function": {
+                "name": self.function.name,
+                "arguments": json.dumps(self.function.arguments, ensure_ascii=False)
+            },
+        }
 
 
 class LLMResponse(BaseModel):
@@ -115,6 +128,7 @@ class LLMResponse(BaseModel):
 
     content: str = Field(..., description="The content of the response")
     tool_calls: list[ToolCall] = Field(default=[], description="The tool calls of the response")
+    message: dict = Field(..., description="The choice of the response")
 
     
 class FlowStepContext(BaseModel):

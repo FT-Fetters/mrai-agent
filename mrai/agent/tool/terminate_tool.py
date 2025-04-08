@@ -1,5 +1,5 @@
 
-from agent.schema import Tool
+from mrai.agent.schema import Tool
 
 
 class Terminate(Tool):

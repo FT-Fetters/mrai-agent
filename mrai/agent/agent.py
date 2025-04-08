@@ -3,9 +3,8 @@ from typing import Optional
 
 from pydantic import Field
 
-from agent.llm.llm import LLM
-from agent.schema import Callback, LLMResponse, Memory, Message, Tool
-from agent.tool.terminate_tool import Terminate
+from mrai.agent.llm.llm import LLM
+from mrai.agent.schema import Callback, LLMResponse, Memory, Message, Tool
 
 from loguru import logger
 
@@ -49,17 +48,17 @@ class Agent(ABC):
     async def action(self):
         """The action of the agent"""
         messages_for_llm = self.memory.messages.copy()
-        response: LLMResponse = await self.llm.chat(messages=messages_for_llm, tools=self.tools)
-        if response.content:
-            self.memory.add_message(Message(role="assistant", content=response.content))
-            logger.info(f"🤔 「{self.name}」 thought: {response.content}")
+        assistant_message: Message = await self.llm.chat(messages=messages_for_llm, tools=self.tools)
+        # add the response to the memory
+        self.memory.add_message(assistant_message)
+        if assistant_message.content:
+            logger.info(f"🤔 「{self.name}」 thought: {assistant_message.content}")
         
-        if response.tool_calls:
-            for tool_call in response.tool_calls:
+        if assistant_message.tool_calls:
+            for tool_call in assistant_message.tool_calls:
                 logger.info(f"🔧 「{self.name}」 called tool: {tool_call.function.name}")
-                # tool_call.function.execute(**tool_call.arguments)
         
-        return response.content, response.tool_calls
+        return assistant_message.content, assistant_message.tool_calls
 
     def add_observation(
             self,

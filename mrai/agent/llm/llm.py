@@ -1,8 +1,8 @@
 from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletionMessageParam
-from agent.schema import Message, LLMResponse, ToolCall, Tool
-from typing import List, Union, Sequence, cast
-from agent.llm.llm_config import LLMConfig
+from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
+from mrai.agent.schema import Message, LLMResponse, ToolCall, Tool
+from typing import List, Union, Sequence, cast, Iterable
+from mrai.agent.llm.llm_config import LLMConfig
 import json
 
 
@@ -46,41 +46,51 @@ class LLM:
         tool = next((tool for tool in tools if tool.name == tool_call.function.name), None)
         if not tool:
             raise ValueError(f"Tool {tool_call.function.name} not found")
-        try:
-            arguments = json.loads(tool_call.function.arguments)
-        except json.JSONDecodeError:
-            arguments = {}
-        return ToolCall(
-            id=tool_call.id,
-            type=tool_call.type,
-            function=tool,
-            arguments=arguments
-        )
 
-    async def chat(self, messages: Sequence[Union[str, dict, Message]], tools: list[Tool] = []) -> LLMResponse:
+        try:
+            return ToolCall(
+                id=tool_call.id,
+                type=tool_call.type,
+                function=ToolCall.ToolCallFunction(
+                    name=tool_call.function.name,
+                    arguments=json.loads(tool_call.function.arguments),
+                ),
+                tool=tool
+            )
+        except json.JSONDecodeError as e:
+            print(f"Invalid JSON in tool call arguments: {tool_call.function.arguments}")
+            raise ValueError(f"Invalid JSON in tool call arguments: {e}")
+
+    async def chat(self, messages: Sequence[Union[str, dict, Message]], tools: list[Tool] = []) -> Message:
         dict_messages: List[ChatCompletionMessageParam] = self.format_messages(messages)
         response = await self.client.chat.completions.create(
             model=self.config.model,
             messages=dict_messages,
             temperature=self.config.temperature,
             max_tokens=self.config.max_tokens,
-            tools=[tool.to_dict() for tool in tools]
+            tools=cast(Iterable[ChatCompletionToolParam], [tool.to_dict() for tool in tools]) if tools else [],
+            tool_choice="auto"
         )
         if not response.choices:
             raise ValueError("No response from OpenAI")
         
         tool_calls: list[ToolCall] = []
         content: str = ""
-        for choice in response.choices:
-            if choice.message.content:
-                content = choice.message.content
-            if choice.message.tool_calls and tools:
-                tool_calls.extend(
-                    self._process_tool_call(tool_call, tools)
-                    for tool_call in choice.message.tool_calls
-                )
+        if not response.choices[0]:
+            raise ValueError("No response from OpenAI")
+        # default use the first choice
+        choice = response.choices[0]
+        if choice.message.content:
+            content = choice.message.content
+        if choice.message.tool_calls and tools:
+            tool_calls.extend(
+                self._process_tool_call(tool_call, tools)
+                for tool_call in choice.message.tool_calls
+            )
         
-        return LLMResponse(
+        assistant_message = Message(
+            role=choice.message.role,
             content=content,
-            tool_calls=tool_calls,
+            tool_calls=tool_calls
         )
+        return assistant_message

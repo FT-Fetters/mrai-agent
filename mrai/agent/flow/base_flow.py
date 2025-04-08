@@ -2,10 +2,10 @@
 
 from abc import ABC, abstractmethod
 
-from agent.agent import Agent
-from agent.schema import FlowInput
-from agent.tool.assign_agent_tool import AssignAgent
-from agent.tool.terminate_tool import Terminate
+from mrai.agent.agent import Agent
+from mrai.agent.schema import FlowInput
+from mrai.agent.tool.assign_agent_tool import AssignAgent
+from mrai.agent.tool.terminate_tool import Terminate
 
 
 class BaseFlow(ABC):
