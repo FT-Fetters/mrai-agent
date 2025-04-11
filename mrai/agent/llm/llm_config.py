@@ -13,5 +13,6 @@ class LLMConfig(BaseModel):
     top_p: float = Field(default=1.0, description="The top P for the OpenAI API")
     frequency_penalty: float = Field(default=0.0, description="The frequency penalty for the OpenAI API")
     api_type: Literal["openai", "azure"] = Field(default="openai", description="The type of API to use")
+    reasoning_effort: Literal["low", "medium", "high"] = Field(default="medium", description="The effort for the OpenAI API")
     
     

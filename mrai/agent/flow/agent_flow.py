@@ -1,9 +1,9 @@
-
 import json
 from mrai.agent.agent import Agent
 from mrai.agent.flow.base_flow import BaseFlow
-from mrai.agent.schema import FlowInput, FlowStepContext, Message
+from mrai.agent.schema import FlowInput, Message, ToolCall
 from loguru import logger
+from typing import AsyncIterator, Union, Optional
 
 
 class AgentFlow(BaseFlow):
@@ -26,7 +26,19 @@ class AgentFlow(BaseFlow):
         
     
     async def step(self, agent: Agent):
-        _, tool_calls = await agent.action()
+        action_result: Union[tuple[Optional[str], list[ToolCall]], AsyncIterator[str]] = await agent.action()
+        
+        # Check if the result is the expected tuple format
+        if not isinstance(action_result, tuple) or len(action_result) != 2:
+            # Handle the generator case or raise an error if unexpected
+            # For now, assume AgentFlow only handles the tuple return type from SimpleAgent
+            logger.error(f"Agent {agent.name} returned an unexpected action result type: {type(action_result)}")
+            # If a generator is returned, we might need different logic or just stop.
+            # Let's raise an error for now, as the rest of the flow depends on tool_calls.
+            raise TypeError(f"AgentFlow currently only supports agents returning tuple[Optional[str], list[ToolCall]], but got {type(action_result)}")
+
+        _, tool_calls = action_result
+        # Now the type checker knows tool_calls is list[ToolCall]
 
         # check if any tool call is a terminate tool
         terminated = any(tool_call.function.name == "terminate" for tool_call in tool_calls)

@@ -1,8 +1,9 @@
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
 from mrai.agent.schema import Message, LLMResponse, ToolCall, Tool
-from typing import List, Union, Sequence, cast, Iterable
+from typing import AsyncIterator, List, Union, Sequence, cast, Iterable
 from mrai.agent.llm.llm_config import LLMConfig
+from mrai.agent.llm import prompt
 import json
 
 
@@ -94,3 +95,41 @@ class LLM:
             tool_calls=tool_calls
         )
         return assistant_message
+    
+    async def stream_chat(
+        self, messages: Sequence[Union[str, dict, Message]],
+        tools: list[Tool] = [],
+        flag: bool = False
+    ) -> AsyncIterator[str]:
+        dict_messages: List[ChatCompletionMessageParam] = self.format_messages(messages)
+        # add tool calls rule to the messages
+        if tools:
+            dict_messages.insert(0, {
+            "role": "system",
+            "content": prompt.TOOL_CALL_RULE.format(
+                tools = json.dumps(
+                    [tool.to_dict() for tool in tools] if tools else [],
+                    ensure_ascii=False,
+                    indent=2
+                ))
+            })
+        async for chunk in await self.client.chat.completions.create(
+            model=self.config.model,
+            messages=dict_messages,
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens,
+            stream=True,
+            reasoning_effort=self.config.reasoning_effort
+        ):
+            if chunk.choices[0].delta.content:
+                if flag:
+                    yield "content::" + chunk.choices[0].delta.content
+                else:
+                    yield chunk.choices[0].delta.content
+            if chunk.choices[0].delta.model_extra:
+                for key, value in chunk.choices[0].delta.model_extra.items():
+                    if value:
+                        if flag:
+                            yield f"{key}::{value}"
+                        else:
+                            yield value
