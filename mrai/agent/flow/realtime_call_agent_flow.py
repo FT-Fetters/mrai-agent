@@ -11,7 +11,7 @@ class RealtimeCallAgentFlow(BaseFlow):
     
     memory: dict
     
-    def __init__(self, agents: dict[str, Agent], organize_memory: Callable[[dict, dict], dict]):
+    def __init__(self, agents: dict[str, Agent], organize_memory: Callable[[str, dict, dict], dict]):
         self.memory = {}
         self.organize_memory = organize_memory
         super().__init__(agents)
@@ -36,6 +36,8 @@ class RealtimeCallAgentFlow(BaseFlow):
             raise ValueError("Primary agent is not provided")
         
     async def step(self, agent: RealtimeCallAgent):
+
+        print("-" * 100)
 
         stream_generator = agent.action()
         if not isinstance(stream_generator, AsyncIterator):
@@ -64,7 +66,7 @@ class RealtimeCallAgentFlow(BaseFlow):
                     return
                 break
             
-        self.organize_memory(observation, self.memory)
+        self.organize_memory(content_cache, observation, self.memory)
         await self.rebuild_memory(agent)
         await self.step(agent)
         

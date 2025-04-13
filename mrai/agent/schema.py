@@ -44,7 +44,7 @@ class Tool(BaseModel, ABC):
     class ToolParameter(BaseModel):
         name: str = Field(..., description="The name of the parameter")
         description: str = Field(..., description="The description of the parameter")
-        type: Literal["string", "number", "boolean", "array", "object", "enum"] = Field(..., description="The type of the parameter")
+        type: Literal["string", "number", "boolean", "list", "object", "enum"] = Field(..., description="The type of the parameter")
         enum: list[str] = Field(default=[], description="The enum of the parameter")
         required: bool = Field(..., description="Whether the parameter is required")
 
