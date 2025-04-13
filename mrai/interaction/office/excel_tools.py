@@ -18,7 +18,14 @@ def excel_tool_list():
         ReadCellTool(),
         WriteCellTool(),
         WriteCellRangeTool(),
-        CreateExcelTool()
+        CreateExcelTool(),
+        FormatCellRangeTool(),
+        MergeCellsTool(),
+        UnmergeCellsTool(),
+        InsertRowsTool(),
+        InsertColsTool(),
+        DeleteRowsTool(),
+        DeleteColsTool()
     ]
 
 
@@ -537,3 +544,544 @@ class CreateExcelTool(Tool):
                     wb.close()
                 except Exception:
                     pass # Ignore potential errors on close
+
+
+class FormatCellRangeTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="format_cell_range",
+            description="Sets the format for a range of cells in an Excel file.",
+            parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path", description="Path to the Excel file.", type="string", required=True
+                ),
+                "sheet_name": Tool.ToolParameter(
+                    name="sheet_name", description="Name of the sheet to modify.", type="string", required=True
+                ),
+                "start_cell": Tool.ToolParameter(
+                    name="start_cell", description="The top-left cell of the range to format (e.g., 'A1').", type="string", required=True
+                ),
+                "end_cell": Tool.ToolParameter(
+                    name="end_cell", description="The bottom-right cell of the range to format (e.g., 'C3').", type="string", required=True
+                ),
+                "font_name": Tool.ToolParameter(
+                    name="font_name", description="Font name (e.g., 'Arial').", type="string", required=False
+                ),
+                "font_size": Tool.ToolParameter(
+                    name="font_size", description="Font size (e.g., 12).", type="number", required=False
+                ),
+                "bold": Tool.ToolParameter(
+                    name="bold", description="Set font to bold (true/false).", type="boolean", required=False
+                ),
+                "italic": Tool.ToolParameter(
+                    name="italic", description="Set font to italic (true/false).", type="boolean", required=False
+                ),
+                "underline": Tool.ToolParameter(
+                    name="underline", description="Set font underline ('single', 'double', 'singleAccounting', 'doubleAccounting', None).", type="string", required=False
+                ),
+                "font_color": Tool.ToolParameter(
+                    name="font_color", description="Font color as hex code (e.g., 'FF0000' for red).", type="string", required=False
+                ),
+                "background_color": Tool.ToolParameter(
+                    name="background_color", description="Cell background color as hex code (e.g., 'FFFF00' for yellow).", type="string", required=False
+                ),
+                "horizontal_alignment": Tool.ToolParameter(
+                    name="horizontal_alignment", description="Horizontal alignment ('general', 'left', 'center', 'right', 'fill', 'justify', 'centerContinuous', 'distributed').", type="string", required=False
+                ),
+                "vertical_alignment": Tool.ToolParameter(
+                    name="vertical_alignment", description="Vertical alignment ('top', 'center', 'bottom', 'justify', 'distributed').", type="string", required=False
+                ),
+            }
+        )
+
+    def execute(self, file_path: str, sheet_name: str, start_cell: str, end_cell: str,
+                font_name: Optional[str] = None, font_size: Optional[int] = None,
+                bold: Optional[bool] = None, italic: Optional[bool] = None, underline: Optional[str] = None,
+                font_color: Optional[str] = None, background_color: Optional[str] = None,
+                horizontal_alignment: Optional[str] = None, vertical_alignment: Optional[str] = None):
+        wb = None
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: file {file_path} not found"
+
+            wb = load_workbook(filename=file_path)
+            if sheet_name not in wb.sheetnames:
+                return f"Error: sheet {sheet_name} not found in file {file_path}"
+            sheet = wb[sheet_name]
+
+            # --- Parse Range ---
+            try:
+                start_col_letter, start_row_num = coordinate_from_string(start_cell)
+                end_col_letter, end_row_num = coordinate_from_string(end_cell)
+                start_col_idx = column_index_from_string(start_col_letter)
+                end_col_idx = column_index_from_string(end_col_letter)
+                
+                if start_row_num > end_row_num or start_col_idx > end_col_idx:
+                     return f"Error: Invalid range order. Start cell {start_cell} must be top-left of end cell {end_cell}."
+
+            except ValueError:
+                return f"Error: Invalid cell coordinates in range '{start_cell}:{end_cell}'"
+            except Exception as e:
+                 return f"Error parsing range '{start_cell}:{end_cell}': {str(e)}"
+
+            # --- Iterate and Apply Formatting ---
+            for row_idx in range(start_row_num, end_row_num + 1):
+                 for col_idx in range(start_col_idx, end_col_idx + 1):
+                    try:
+                        target_cell = sheet.cell(row=row_idx, column=col_idx)
+
+                        # --- Apply Font Formatting ---
+                        current_font = target_cell.font
+                        new_font = Font(name=font_name if font_name is not None else current_font.name,
+                                      size=font_size if font_size is not None else current_font.size,
+                                      bold=bold if bold is not None else current_font.bold, # Apply if specified
+                                      italic=italic if italic is not None else current_font.italic, # Apply if specified
+                                      underline=underline if underline is not None else current_font.underline, # type: ignore
+                                      color=font_color if font_color is not None else current_font.color)
+                        target_cell.font = new_font
+
+                        # --- Apply Background Fill ---
+                        if background_color:
+                            fill = PatternFill(start_color=background_color, end_color=background_color, fill_type="solid")
+                            target_cell.fill = fill
+
+                        # --- Apply Alignment ---
+                        current_alignment = target_cell.alignment
+                        new_alignment = Alignment(horizontal=horizontal_alignment if horizontal_alignment is not None else current_alignment.horizontal,
+                                                vertical=vertical_alignment if vertical_alignment is not None else current_alignment.vertical,
+                                                text_rotation=current_alignment.text_rotation,
+                                                wrap_text=current_alignment.wrap_text,
+                                                shrink_to_fit=current_alignment.shrink_to_fit,
+                                                indent=current_alignment.indent)
+                        target_cell.alignment = new_alignment
+
+                    except Exception as cell_error:
+                         cell_coord = f"{get_column_letter(col_idx)}{row_idx}"
+                         return f"Error formatting cell {cell_coord}: {str(cell_error)}"
+
+            wb.save(file_path)
+            return f"Successfully formatted cell range {start_cell}:{end_cell} in sheet '{sheet_name}' of file '{file_path}'"
+
+        except Exception as e:
+            return f"Error formatting cell range: {str(e)}"
+        finally:
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+
+
+class MergeCellsTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="merge_cells",
+            description="Merges one or more ranges of cells in an Excel sheet.",
+            parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path", description="Path to the Excel file.", type="string", required=True
+                ),
+                "sheet_name": Tool.ToolParameter(
+                    name="sheet_name", description="Name of the sheet to modify.", type="string", required=True
+                ),
+                "ranges": Tool.ToolParameter(
+                    name="ranges", description="A list of cell ranges to merge (e.g., ['A1:B2', 'D1:E2']).", type="list", required=True
+                ),
+            }
+        )
+
+    def execute(self, file_path: str, sheet_name: str, ranges: List[str]):
+        wb = None
+        results = {"success": [], "errors": []}
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: file {file_path} not found"
+
+            wb = load_workbook(filename=file_path)
+            if sheet_name not in wb.sheetnames:
+                return f"Error: sheet {sheet_name} not found in file {file_path}"
+            sheet = wb[sheet_name]
+
+            if not isinstance(ranges, list):
+                return "Error: 'ranges' parameter must be a list of range strings."
+
+            for merge_range in ranges:
+                if not isinstance(merge_range, str):
+                    results["errors"].append(f"Invalid item in ranges list (must be string): {merge_range}")
+                    continue
+                try:
+                    # Basic validation before attempting merge
+                    if ':' not in merge_range:
+                         raise ValueError("Range must contain ':'")
+                    start_cell, end_cell = merge_range.split(':', 1)
+                    coordinate_from_string(start_cell)
+                    coordinate_from_string(end_cell)
+                    
+                    sheet.merge_cells(merge_range)
+                    results["success"].append(merge_range)
+                except ValueError as ve:
+                    results["errors"].append(f"Invalid coordinates in range '{merge_range}': {str(ve)}")
+                except Exception as e:
+                    # Consider logging full traceback for debugging
+                    results["errors"].append(f"Error merging range '{merge_range}': {str(e)}")
+
+            if results["success"] or results["errors"]:
+                wb.save(file_path)
+
+            # --- Format output message ---
+            output_message = f"Merge operation summary for sheet '{sheet_name}' in '{file_path}':\n"
+            if results["success"]:
+                output_message += f"Successfully merged ranges: {', '.join(results['success'])}\n"
+            if results["errors"]:
+                output_message += f"Errors encountered: {'; '.join(results['errors'])}"
+            
+            # If only errors occurred, prepend "Error: " to the message
+            if not results["success"] and results["errors"]:
+                 output_message = "Error: " + output_message
+            elif not results["success"] and not results["errors"]:
+                 output_message = "No valid ranges provided to merge."
+                 
+            return output_message.strip()
+
+        except Exception as e:
+            return f"Error during merge operation: {str(e)}"
+        finally:
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+
+
+class UnmergeCellsTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="unmerge_cells",
+            description="Unmerges one or more previously merged ranges of cells in an Excel sheet.",
+             parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path", description="Path to the Excel file.", type="string", required=True
+                ),
+                "sheet_name": Tool.ToolParameter(
+                    name="sheet_name", description="Name of the sheet to modify.", type="string", required=True
+                ),
+                "ranges": Tool.ToolParameter(
+                    name="ranges", description="A list of cell ranges to unmerge (e.g., ['A1:B2', 'D1:E2']).", type="list", required=True
+                ),
+            }
+        )
+
+    def execute(self, file_path: str, sheet_name: str, ranges: List[str]):
+        wb = None
+        results = {"success": [], "errors": []}
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: file {file_path} not found"
+
+            wb = load_workbook(filename=file_path)
+            if sheet_name not in wb.sheetnames:
+                return f"Error: sheet {sheet_name} not found in file {file_path}"
+            sheet = wb[sheet_name]
+
+            if not isinstance(ranges, list):
+                return "Error: 'ranges' parameter must be a list of range strings."
+
+            for unmerge_range in ranges:
+                if not isinstance(unmerge_range, str):
+                     results["errors"].append(f"Invalid item in ranges list (must be string): {unmerge_range}")
+                     continue
+                try:
+                    # Basic validation before attempting unmerge
+                    if ':' not in unmerge_range:
+                        raise ValueError("Range must contain ':'")
+                    start_cell, end_cell = unmerge_range.split(':', 1)
+                    coordinate_from_string(start_cell)
+                    coordinate_from_string(end_cell)
+                    
+                    sheet.unmerge_cells(unmerge_range)
+                    results["success"].append(unmerge_range)
+                except ValueError as ve:
+                    results["errors"].append(f"Invalid coordinates in range '{unmerge_range}': {str(ve)}")
+                except Exception as e:
+                    # openpyxl might raise errors if range wasn't merged, catch them
+                    results["errors"].append(f"Error unmerging range '{unmerge_range}': {str(e)}")
+
+            if results["success"] or results["errors"]:
+                wb.save(file_path)
+
+            # --- Format output message ---
+            output_message = f"Unmerge operation summary for sheet '{sheet_name}' in '{file_path}':\n"
+            if results["success"]:
+                output_message += f"Successfully unmerged ranges: {', '.join(results['success'])}\n"
+            if results["errors"]:
+                output_message += f"Errors encountered: {'; '.join(results['errors'])}"
+                
+            # If only errors occurred, prepend "Error: "
+            if not results["success"] and results["errors"]:
+                output_message = "Error: " + output_message
+            elif not results["success"] and not results["errors"]:
+                 output_message = "No valid ranges provided to unmerge."
+
+            return output_message.strip()
+
+        except Exception as e:
+            return f"Error during unmerge operation: {str(e)}"
+        finally:
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+
+
+class InsertRowsTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="insert_rows",
+            description="Inserts one or more rows into an Excel sheet.",
+            parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path", description="Path to the Excel file.", type="string", required=True
+                ),
+                "sheet_name": Tool.ToolParameter(
+                    name="sheet_name", description="Name of the sheet to modify.", type="string", required=True
+                ),
+                "index": Tool.ToolParameter(
+                    name="index", description="The row number before which to insert rows (1-based).", type="number", required=True
+                ),
+                "amount": Tool.ToolParameter(
+                    name="amount", description="The number of rows to insert (default is 1).", type="number", required=False
+                ),
+            }
+        )
+
+    def execute(self, file_path: str, sheet_name: str, index: int, amount: int = 1):
+        wb = None
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: file {file_path} not found"
+            if amount < 1:
+                return "Error: Amount must be a positive integer."
+            if index < 1:
+                 return "Error: Row index must be 1 or greater."
+
+            wb = load_workbook(filename=file_path)
+            if sheet_name not in wb.sheetnames:
+                return f"Error: sheet {sheet_name} not found in file {file_path}"
+            sheet = wb[sheet_name]
+
+            try:
+                 sheet.insert_rows(idx=index, amount=amount)
+            except Exception as e:
+                 return f"Error inserting rows at index {index}: {str(e)}"
+
+            wb.save(file_path)
+            return f"Successfully inserted {amount} row(s) before row {index} in sheet '{sheet_name}' of file '{file_path}'"
+
+        except Exception as e:
+            return f"Error inserting rows: {str(e)}"
+        finally:
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+
+
+class InsertColsTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="insert_cols",
+            description="Inserts one or more columns into an Excel sheet.",
+            parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path", description="Path to the Excel file.", type="string", required=True
+                ),
+                "sheet_name": Tool.ToolParameter(
+                    name="sheet_name", description="Name of the sheet to modify.", type="string", required=True
+                ),
+                "index": Tool.ToolParameter(
+                    name="index", description="The column letter (e.g., 'C') or number (e.g., 3 for 1-based) before which to insert columns.", type="string", required=True
+                ),
+                "amount": Tool.ToolParameter(
+                    name="amount", description="The number of columns to insert (default is 1).", type="number", required=False
+                ),
+            }
+        )
+
+    def execute(self, file_path: str, sheet_name: str, index: Any, amount: int = 1):
+        wb = None
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: file {file_path} not found"
+            if amount < 1:
+                return "Error: Amount must be a positive integer."
+
+            # Convert column index if it's a letter or number-like string
+            col_idx: int
+            index_str = str(index) # Convert input to string for consistent processing
+            if index_str.isalpha(): # Check if it's purely alphabetical (column letter)
+                try:
+                    col_idx = column_index_from_string(index_str.upper())
+                except ValueError:
+                    return f"Error: Invalid column letter '{index_str}'"
+            elif index_str.isdigit(): # Check if it's purely digits (column number)
+                 col_num = int(index_str)
+                 if col_num < 1:
+                     return "Error: Column index number must be 1 or greater."
+                 col_idx = col_num
+            else:
+                 return f"Error: Invalid column index format '{index}'. Use letter (e.g., 'C') or positive number (e.g., 3)."
+
+
+            wb = load_workbook(filename=file_path)
+            if sheet_name not in wb.sheetnames:
+                return f"Error: sheet {sheet_name} not found in file {file_path}"
+            sheet = wb[sheet_name]
+
+            try:
+                 sheet.insert_cols(idx=col_idx, amount=amount)
+            except Exception as e:
+                 return f"Error inserting columns at index {col_idx}: {str(e)}"
+
+
+            wb.save(file_path)
+            original_index_str = get_column_letter(col_idx) # Use converted index for consistent message
+            return f"Successfully inserted {amount} column(s) before column {original_index_str} (index {col_idx}) in sheet '{sheet_name}' of file '{file_path}'"
+
+        except Exception as e:
+            return f"Error inserting columns: {str(e)}"
+        finally:
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+
+
+class DeleteRowsTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="delete_rows",
+            description="Deletes one or more rows from an Excel sheet.",
+             parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path", description="Path to the Excel file.", type="string", required=True
+                ),
+                "sheet_name": Tool.ToolParameter(
+                    name="sheet_name", description="Name of the sheet to modify.", type="string", required=True
+                ),
+                "index": Tool.ToolParameter(
+                    name="index", description="The starting row number to delete (1-based).", type="number", required=True
+                ),
+                "amount": Tool.ToolParameter(
+                    name="amount", description="The number of rows to delete (default is 1).", type="number", required=False
+                ),
+            }
+        )
+
+    def execute(self, file_path: str, sheet_name: str, index: int, amount: int = 1):
+        wb = None
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: file {file_path} not found"
+            if amount < 1:
+                return "Error: Amount must be a positive integer."
+            if index < 1:
+                return "Error: Row index must be 1 or greater."
+
+
+            wb = load_workbook(filename=file_path)
+            if sheet_name not in wb.sheetnames:
+                return f"Error: sheet {sheet_name} not found in file {file_path}"
+            sheet = wb[sheet_name]
+
+            try:
+                # Optional: Add check if index + amount exceeds max_row? openpyxl might handle it.
+                 sheet.delete_rows(idx=index, amount=amount)
+            except Exception as e:
+                 return f"Error deleting rows starting at index {index}: {str(e)}"
+
+
+            wb.save(file_path)
+            return f"Successfully deleted {amount} row(s) starting from row {index} in sheet '{sheet_name}' of file '{file_path}'"
+
+        except Exception as e:
+            return f"Error deleting rows: {str(e)}"
+        finally:
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+
+
+class DeleteColsTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="delete_cols",
+            description="Deletes one or more columns from an Excel sheet.",
+             parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path", description="Path to the Excel file.", type="string", required=True
+                ),
+                "sheet_name": Tool.ToolParameter(
+                    name="sheet_name", description="Name of the sheet to modify.", type="string", required=True
+                ),
+                "index": Tool.ToolParameter(
+                    name="index", description="The starting column letter (e.g., 'C') or number (e.g., 3 for 1-based) to delete.", type="string", required=True
+                ),
+                "amount": Tool.ToolParameter(
+                    name="amount", description="The number of columns to delete (default is 1).", type="number", required=False
+                ),
+            }
+        )
+
+    def execute(self, file_path: str, sheet_name: str, index: Any, amount: int = 1):
+        wb = None
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: file {file_path} not found"
+            if amount < 1:
+                return "Error: Amount must be a positive integer."
+
+            # Convert column index if it's a letter or number-like string
+            col_idx: int
+            index_str = str(index) # Convert input to string for consistent processing
+            if index_str.isalpha(): # Check if it's purely alphabetical (column letter)
+                try:
+                    col_idx = column_index_from_string(index_str.upper())
+                except ValueError:
+                    return f"Error: Invalid column letter '{index_str}'"
+            elif index_str.isdigit(): # Check if it's purely digits (column number)
+                 col_num = int(index_str)
+                 if col_num < 1:
+                     return "Error: Column index number must be 1 or greater."
+                 col_idx = col_num
+            else:
+                 return f"Error: Invalid column index format '{index}'. Use letter (e.g., 'C') or positive number (e.g., 3)."
+
+
+            wb = load_workbook(filename=file_path)
+            if sheet_name not in wb.sheetnames:
+                return f"Error: sheet {sheet_name} not found in file {file_path}"
+            sheet = wb[sheet_name]
+
+            try:
+                # Optional: Add check if index + amount exceeds max_column? openpyxl might handle it.
+                 sheet.delete_cols(idx=col_idx, amount=amount)
+            except Exception as e:
+                 return f"Error deleting columns starting at index {col_idx}: {str(e)}"
+
+            wb.save(file_path)
+            original_index_str = get_column_letter(col_idx) # Use converted index for consistent message
+            return f"Successfully deleted {amount} column(s) starting from column {original_index_str} (index {col_idx}) in sheet '{sheet_name}' of file '{file_path}'"
+
+        except Exception as e:
+            return f"Error deleting columns: {str(e)}"
+        finally:
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
