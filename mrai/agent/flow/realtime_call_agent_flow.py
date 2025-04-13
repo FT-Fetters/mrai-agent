@@ -137,6 +137,9 @@ class RealtimeCallAgentFlow(BaseFlow):
             return False, {}
         tool_call = tool_call_match.group(1)
         # print(tool_call)
+        # 去掉 // 和 /* */ 注释
+        tool_call = re.sub(r'//.*?\n', '\n', tool_call)  # 去掉 //
+        tool_call = re.sub(r'/\*.*?\*/', '', tool_call, flags=re.DOTALL)  # 去掉 /* */
         tool_call = json.loads(tool_call)
         return True, tool_call
     
