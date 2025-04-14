@@ -6,11 +6,11 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml.ns import qn
 # from docx.oxml import OxmlElement # Not used directly now
 # import docx.opc.constants # Not used
-from docx.shared import Twips # <<< CORRECTED IMPORT for width conversion
+from docx.shared import Twips
 from loguru import logger
-import os # <<< ADDED IMPORT
+import os
+from typing import List, Dict, Optional
 
-# <<< ADDED IMPORTs for table/cell formatting
 from docx.enum.table import WD_ALIGN_VERTICAL, WD_ROW_HEIGHT_RULE
 # Removed redundant: from docx.oxml.shared import qn (Ensuring this is removed)
 
@@ -22,7 +22,17 @@ from mrai.agent.schema import Tool
 
 def word_tool_list():
     return [
-        ReadWordTool()
+        ReadWordTool(),
+        CreateWordTool(),
+        AddParagraphTool(),
+        AddTableTool(),
+        ModifyParagraphTool(),
+        ModifyTableCellTool(),
+        ApplyRunFormattingTool(),
+        ApplyParagraphFormattingTool(),
+        InsertParagraphTool(),
+        DeleteParagraphTool(),
+        DeleteTableTool(),
     ]
 
 class ReadWordTool(Tool):
@@ -164,7 +174,6 @@ class ReadWordTool(Tool):
             style_name = table.style.name
         output.append(f"Table Style: '{style_name}'")
 
-        # <<< ADDED: Check for table-level borders
         try:
             tblPr = table._tbl.tblPr
             if tblPr is not None:
@@ -187,9 +196,7 @@ class ReadWordTool(Tool):
         formatting_notes = [] # Store formatting notes (row_idx, col_idx_or_0, note)
 
         if num_cols > 0 and table.rows:
-            # <<< ADDED: Process header row height
             self._add_row_formatting_notes(table.rows[0], 1, formatting_notes)
-            # >>> END ADDED
 
             # Build Markdown table header from first row
             header_cells_text = []
@@ -245,9 +252,7 @@ class ReadWordTool(Tool):
 
             # Fill table content (iterate through rows *starting from the second row*)
             for row_idx, row in enumerate(table.rows[1:], start=1): # Start from row index 1 (second row)
-                # <<< ADDED: Process data row height
                 self._add_row_formatting_notes(row, row_idx + 1, formatting_notes)
-                # >>> END ADDED
 
                 row_content = []
                 cells_to_process = row.cells
@@ -535,9 +540,987 @@ class ReadWordTool(Tool):
             return f"An unexpected error occurred while reading Word file '{file_path}': {e}"
 
 
+
+class CreateWordTool(Tool):
+    """Creates a new, empty Word document at the specified path."""
+    def __init__(self):
+        super().__init__(
+            name="create_word_document",
+            description="Creates a new, empty Word document (.docx). If the file already exists, it will be overwritten.",
+            parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path",
+                    type="string",
+                    description="The full path where the new Word document should be saved (e.g., /path/to/new_document.docx).",
+                    required=True
+                )
+            }
+        )
+
+    def execute(self, file_path: str) -> str:
+        """
+        Creates a new Word document.
+
+        Args:
+            file_path (str): The path to save the new document.
+
+        Returns:
+            str: A confirmation message or an error message.
+        """
+        try:
+            # Ensure the directory exists
+            dir_path = os.path.dirname(file_path)
+            if dir_path and not os.path.exists(dir_path):
+                os.makedirs(dir_path)
+                logger.info(f"Created directory: {dir_path}")
+
+            document = Document()
+            document.save(file_path)
+            logger.info(f"Successfully created new Word document at: {file_path}")
+            return f"Successfully created new Word document at: {file_path}"
+        except Exception as e:
+            logger.exception(f"Error creating Word document at '{file_path}': {e}")
+            return f"Error creating Word document at '{file_path}': {e}"
+
+class AddParagraphTool(Tool):
+    """Adds a paragraph to the end of a Word document."""
+    def __init__(self):
+        super().__init__(
+            name="add_paragraph_to_word",
+            description="Adds a new paragraph with the specified text to the end of an existing Word document. Optionally applies a built-in style.",
+            parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path",
+                    type="string",
+                    description="The path to the Word document file to modify.",
+                    required=True
+                ),
+                "text": Tool.ToolParameter(
+                    name="text",
+                    type="string",
+                    description="The text content of the new paragraph.",
+                    required=True
+                ),
+                "style": Tool.ToolParameter(
+                    name="style",
+                    type="string",
+                    description="Optional. The name of a built-in Word style to apply (e.g., 'Heading 1', 'Body Text', 'Normal'). If omitted or invalid, default paragraph style is used.",
+                    required=False
+                )
+            }
+        )
+
+    def execute(self, file_path: str, text: str, style: Optional[str] = None) -> str:
+        """
+        Adds a paragraph to a Word document.
+
+        Args:
+            file_path (str): Path to the document.
+            text (str): Text to add.
+            style (Optional[str]): Style name to apply.
+
+        Returns:
+            str: Confirmation or error message.
+        """
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: File not found at '{file_path}'. Use create_word_document first if needed."
+
+            document = Document(file_path)
+
+            # Add the paragraph with optional style
+            paragraph = document.add_paragraph(text)
+            if style:
+                try:
+                    # Check if the style exists in the document's known styles
+                    # Note: This is a basic check; truly validating requires more complex checks or handling potential errors.
+                    # python-docx doesn't provide a direct way to list all available built-in style names easily without introspection.
+                    paragraph.style = document.styles[style] # type: ignore
+                    style_applied_msg = f" with style '{style}'"
+                except KeyError:
+                    logger.warning(f"Style '{style}' not found in document styles. Using default paragraph style.")
+                    style_applied_msg = f" (Warning: Style '{style}' not found, used default)"
+                except Exception as style_e: # Catch other potential style errors
+                    logger.warning(f"Error applying style '{style}': {style_e}. Using default paragraph style.")
+                    style_applied_msg = f" (Warning: Error applying style '{style}', used default)"
+            else:
+                style_applied_msg = ""
+
+
+            document.save(file_path)
+            logger.info(f"Successfully added paragraph to '{file_path}'{style_applied_msg}.")
+            return f"Successfully added paragraph to '{file_path}'{style_applied_msg}."
+
+        except Exception as e:
+            logger.exception(f"Error adding paragraph to Word document '{file_path}': {e}")
+            return f"Error adding paragraph to Word document '{file_path}': {e}"
+
+
+class AddTableTool(Tool):
+    """Adds a table to the end of a Word document."""
+    def __init__(self):
+        super().__init__(
+            name="add_table_to_word",
+            description="Adds a new table with specified dimensions to the end of an existing Word document. Optionally applies a built-in table style and populates the first row as a header.",
+            parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path",
+                    type="string",
+                    description="The path to the Word document file to modify.",
+                    required=True
+                ),
+                "rows": Tool.ToolParameter(
+                    name="rows",
+                    type="number",
+                    description="The number of rows for the new table.",
+                    required=True
+                ),
+                "cols": Tool.ToolParameter(
+                    name="cols",
+                    type="number",
+                    description="The number of columns for the new table.",
+                    required=True
+                ),
+                "style": Tool.ToolParameter(
+                    name="style",
+                    type="string",
+                    description="Optional. The name of a built-in Word table style to apply (e.g., 'Table Grid', 'Light Shading Accent 1'). If omitted or invalid, the default table style is used.",
+                    required=False
+                ),
+                 "header_row": Tool.ToolParameter(
+                    name="header_row",
+                    type="list",
+                    description="Optional. A list of strings representing the content for the first row (header). The list length must match the number of columns.",
+                    required=False
+                )
+            }
+        )
+
+    def execute(self, file_path: str, rows: int, cols: int, style: Optional[str] = None, header_row: Optional[List[str]] = None) -> str:
+        """
+        Adds a table to a Word document.
+
+        Args:
+            file_path (str): Path to the document.
+            rows (int): Number of rows.
+            cols (int): Number of columns.
+            style (Optional[str]): Table style name.
+            header_row (Optional[List[str]]): List of header cell contents.
+
+        Returns:
+            str: Confirmation or error message.
+        """
+        try:
+            if not os.path.exists(file_path):
+                 return f"Error: File not found at '{file_path}'. Use create_word_document first if needed."
+            if rows <= 0 or cols <= 0:
+                 return "Error: Number of rows and columns must be positive."
+            if header_row and len(header_row) != cols:
+                return f"Error: Header row list length ({len(header_row)}) does not match the number of columns ({cols})."
+
+
+            document = Document(file_path)
+
+            # Add the table
+            table = document.add_table(rows=rows, cols=cols)
+            style_applied_msg = ""
+
+            # Apply style if specified
+            if style:
+                try:
+                    table.style = document.styles[style] # type: ignore
+                    style_applied_msg = f" with style '{style}'"
+                except KeyError:
+                    logger.warning(f"Table style '{style}' not found in document styles. Using default table style.")
+                    style_applied_msg = f" (Warning: Table Style '{style}' not found, used default)"
+                except Exception as style_e:
+                    logger.warning(f"Error applying table style '{style}': {style_e}. Using default table style.")
+                    style_applied_msg = f" (Warning: Error applying table style '{style}', used default)"
+
+            # Populate header row if provided
+            header_populated_msg = ""
+            if header_row:
+                hdr_cells = table.rows[0].cells
+                for i, header_text in enumerate(header_row):
+                    hdr_cells[i].text = header_text
+                header_populated_msg = " and populated header row"
+
+
+            # Add a blank paragraph after the table for spacing, unless it's the very last element
+            # This often improves layout when viewing the document.
+            document.add_paragraph()
+
+
+            document.save(file_path)
+            logger.info(f"Successfully added {rows}x{cols} table to '{file_path}'{style_applied_msg}{header_populated_msg}.")
+            return f"Successfully added {rows}x{cols} table to '{file_path}'{style_applied_msg}{header_populated_msg}."
+
+        except Exception as e:
+            logger.exception(f"Error adding table to Word document '{file_path}': {e}")
+            return f"Error adding table to Word document '{file_path}': {e}"
+
+
+
+class ModifyParagraphTool(Tool):
+    """Modifies a specific paragraph in a Word document."""
+    def __init__(self):
+        super().__init__(
+            name="modify_paragraph_in_word",
+            description="Modifies the text or style of a specific paragraph in a Word document. The paragraph can be identified either by its 1-based index or by unique text it contains. At least one modification (new_text or new_style) must be provided.",
+            parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path",
+                    type="string",
+                    description="The path to the Word document file to modify.",
+                    required=True
+                ),
+                "paragraph_identifier": Tool.ToolParameter(
+                    name="paragraph_identifier",
+                    type="string",
+                    description="Identifier for the paragraph. Can be its 1-based index (e.g., '5') or a unique string of text contained within the paragraph (e.g., 'report introduction').",
+                    required=True
+                ),
+                "new_text": Tool.ToolParameter(
+                    name="new_text",
+                    type="string",
+                    description="Optional. The new text content to replace the paragraph's current text. If omitted, the text is not changed.",
+                    required=False
+                ),
+                "new_style": Tool.ToolParameter(
+                    name="new_style",
+                    type="string",
+                    description="Optional. The name of a built-in Word style to apply to the paragraph (e.g., 'Heading 1', 'Body Text'). If omitted, the style is not changed.",
+                    required=False
+                )
+            }
+        )
+
+    def execute(self, file_path: str, paragraph_identifier: str, new_text: Optional[str] = None, new_style: Optional[str] = None) -> str:
+        """
+        Modifies a paragraph's text or style.
+
+        Args:
+            file_path (str): Path to the document.
+            paragraph_identifier (str): Index (as string) or text content to find the paragraph.
+            new_text (Optional[str]): New text for the paragraph.
+            new_style (Optional[str]): New style name for the paragraph.
+
+        Returns:
+            str: Confirmation or error message.
+        """
+        if new_text is None and new_style is None:
+            return "Error: You must provide either 'new_text' or 'new_style' to modify the paragraph."
+
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: File not found at '{file_path}'."
+
+            document = Document(file_path)
+            target_paragraph = None
+            identifier_type = "unknown"
+
+            # Try identifying by index first
+            try:
+                para_index_1_based = int(paragraph_identifier)
+                if 1 <= para_index_1_based <= len(document.paragraphs):
+                    target_paragraph = document.paragraphs[para_index_1_based - 1]
+                    identifier_type = f"index {para_index_1_based}"
+                else:
+                    return f"Error: Paragraph index {para_index_1_based} is out of range (1 to {len(document.paragraphs)})."
+            except ValueError:
+                # If not an integer, assume it's text content
+                identifier_type = f"text '{paragraph_identifier}'"
+                found = False
+                for i, para in enumerate(document.paragraphs):
+                    if paragraph_identifier in para.text:
+                        target_paragraph = para
+                        logger.info(f"Found paragraph containing text '{paragraph_identifier}' at index {i+1}.")
+                        found = True
+                        break
+                if not found:
+                    return f"Error: Could not find any paragraph containing the text: '{paragraph_identifier}'."
+
+            if target_paragraph is None: # Should technically be caught above, but safety check
+                 return f"Error: Could not identify the paragraph using '{paragraph_identifier}'."
+
+            modified_parts = []
+
+            # Apply new style if provided
+            if new_style:
+                try:
+                    target_paragraph.style = document.styles[new_style] # type: ignore
+                    modified_parts.append(f"style set to '{new_style}'")
+                    logger.info(f"Applied style '{new_style}' to paragraph {identifier_type}.")
+                except KeyError:
+                    logger.warning(f"Style '{new_style}' not found. Style was not changed.")
+                    # Optionally return an error here, or just log and continue
+                    return f"Error: Style '{new_style}' not found in the document. No changes made to style."
+                except Exception as style_e:
+                    logger.warning(f"Error applying style '{new_style}': {style_e}. Style was not changed.")
+                    return f"Error applying style '{new_style}': {style_e}. No changes made to style."
+
+            # Replace text if provided
+            if new_text is not None:
+                # --- Try to preserve formatting from the first run --- START
+                original_font = None
+                if target_paragraph.runs:
+                    original_font = target_paragraph.runs[0].font
+                # --- Try to preserve formatting from the first run --- END
+
+                # Clear existing content (runs) within the paragraph
+                # Based on https://github.com/python-openxml/python-docx/issues/33#issuecomment-77661907
+                p_element = target_paragraph._element
+                p_element.clear_content()
+                # Add the new text as a single run
+                new_run = target_paragraph.add_run(new_text)
+
+                # --- Apply preserved formatting --- START
+                if original_font:
+                    new_run.font.name = original_font.name
+                    new_run.font.size = original_font.size
+                    new_run.font.bold = original_font.bold
+                    new_run.font.italic = original_font.italic
+                    new_run.font.underline = original_font.underline
+                    new_run.font.color.rgb = original_font.color.rgb
+                    # Copy other attributes as needed (e.g., strike, small_caps etc.)
+                # --- Apply preserved formatting --- END
+
+                modified_parts.append("text updated (attempted style preservation)")
+                logger.info(f"Replaced text in paragraph {identifier_type}, attempted style preservation.")
+
+            document.save(file_path)
+            modification_summary = " and ".join(modified_parts)
+            return f"Successfully modified paragraph identified by {identifier_type}: {modification_summary} in '{file_path}'."
+
+        except Exception as e:
+            logger.exception(f"Error modifying paragraph in Word document '{file_path}': {e}")
+            return f"Error modifying paragraph in Word document '{file_path}': {e}"
+
+
+class ModifyTableCellTool(Tool):
+    """Modifies the text content of a specific cell in a table within a Word document."""
+    def __init__(self):
+        super().__init__(
+            name="modify_table_cell_in_word",
+            description="Modifies the text content of a specific cell within a table in a Word document. The table and cell are identified by their 1-based indices.",
+            parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path",
+                    type="string",
+                    description="The path to the Word document file to modify.",
+                    required=True
+                ),
+                "table_index": Tool.ToolParameter(
+                    name="table_index",
+                    type="number",
+                    description="The 1-based index of the table within the document.",
+                    required=True
+                ),
+                "row_index": Tool.ToolParameter(
+                    name="row_index",
+                    type="number",
+                    description="The 1-based index of the row within the table.",
+                    required=True
+                ),
+                "col_index": Tool.ToolParameter(
+                    name="col_index",
+                    type="number",
+                    description="The 1-based index of the column within the row.",
+                    required=True
+                ),
+                "new_text": Tool.ToolParameter(
+                    name="new_text",
+                    type="string",
+                    description="The new text content for the specified cell.",
+                    required=True
+                )
+            }
+        )
+
+    def execute(self, file_path: str, table_index: int, row_index: int, col_index: int, new_text: str) -> str:
+        """
+        Modifies the text in a table cell.
+
+        Args:
+            file_path (str): Path to the document.
+            table_index (int): 1-based index of the table.
+            row_index (int): 1-based index of the row.
+            col_index (int): 1-based index of the column.
+            new_text (str): New text for the cell.
+
+        Returns:
+            str: Confirmation or error message.
+        """
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: File not found at '{file_path}'."
+
+            document = Document(file_path)
+
+            # Validate table index
+            if not (1 <= table_index <= len(document.tables)):
+                return f"Error: Table index {table_index} is out of range (1 to {len(document.tables)})."
+            table = document.tables[table_index - 1]
+
+            # Validate row index
+            if not (1 <= row_index <= len(table.rows)):
+                return f"Error: Row index {row_index} is out of range (1 to {len(table.rows)}) for table {table_index}."
+            row = table.rows[row_index - 1]
+
+            # Validate column index
+            if not (1 <= col_index <= len(row.cells)):
+                 # Note: This uses the actual cell count in the specific row, which can vary due to merged cells.
+                 # A more robust approach might consider the table's intended column count if merged cells are common.
+                 return f"Error: Column index {col_index} is out of range (1 to {len(row.cells)}) for table {table_index}, row {row_index}."
+            cell = row.cells[col_index - 1]
+
+            # --- Try to preserve formatting from the first run of the first paragraph --- START
+            original_font = None
+            first_paragraph = None
+            if cell.paragraphs:
+                first_paragraph = cell.paragraphs[0]
+                if first_paragraph.runs:
+                    original_font = first_paragraph.runs[0].font
+            # --- Try to preserve formatting --- END
+
+            # Clear cell content by replacing text in the first paragraph
+            # More robust clearing might iterate through paragraphs and clear runs if needed
+            cell.text = "" # Clear text, this might remove paragraphs other than the first
+
+            # Ensure there is at least one paragraph to add the run to
+            if not cell.paragraphs:
+                 cell.add_paragraph("") # Add an empty paragraph if cleared completely
+            target_para_in_cell = cell.paragraphs[0]
+
+            # Add new text as a run
+            new_run = target_para_in_cell.add_run(new_text)
+
+            # --- Apply preserved formatting --- START
+            if original_font:
+                new_run.font.name = original_font.name
+                new_run.font.size = original_font.size
+                new_run.font.bold = original_font.bold
+                new_run.font.italic = original_font.italic
+                new_run.font.underline = original_font.underline
+                new_run.font.color.rgb = original_font.color.rgb
+                # Copy other relevant font attributes if necessary
+            # --- Apply preserved formatting --- END
+
+            document.save(file_path)
+            logger.info(f"Successfully modified cell ({row_index}, {col_index}) in table {table_index} in '{file_path}', attempted style preservation.")
+            return f"Successfully modified cell at Table {table_index}, Row {row_index}, Col {col_index} to '{new_text}' in '{file_path}', attempted style preservation."
+
+        except Exception as e:
+            logger.exception(f"Error modifying table cell in Word document '{file_path}': {e}")
+            return f"Error modifying table cell in Word document '{file_path}': {e}"
+
+class ApplyRunFormattingTool(Tool):
+    """Applies formatting to specific text runs within a paragraph."""
+    def __init__(self):
+        super().__init__(
+            name="apply_run_formatting_in_word",
+            description=(
+                "Finds specific text within a target paragraph (identified by index or contained text) "
+                "and applies formatting (bold, italic, underline, font size, font name, color) to the text run(s) containing it. "
+                "Specify at least one formatting option."
+            ),
+            parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path", type="string",
+                    description="Path to the Word document.", required=True
+                ),
+                "paragraph_identifier": Tool.ToolParameter(
+                    name="paragraph_identifier", type="string",
+                    description="Identifier for the target paragraph (1-based index or unique contained text).", required=True
+                ),
+                "target_text": Tool.ToolParameter(
+                    name="target_text", type="string",
+                    description="The specific text within the paragraph to apply formatting to. The formatting will be applied to the entire run containing this text.", required=True
+                ),
+                "bold": Tool.ToolParameter(
+                    name="bold", type="boolean",
+                    description="Apply bold formatting.", required=False
+                ),
+                "italic": Tool.ToolParameter(
+                    name="italic", type="boolean",
+                    description="Apply italic formatting.", required=False
+                ),
+                "underline": Tool.ToolParameter(
+                    name="underline", type="boolean",
+                    description="Apply underline formatting.", required=False
+                ),
+                "font_size_pt": Tool.ToolParameter(
+                    name="font_size_pt", type="number",
+                    description="Set font size in points (e.g., 12).", required=False
+                ),
+                "font_name": Tool.ToolParameter(
+                    name="font_name", type="string",
+                    description="Set font name (e.g., 'Calibri', 'Times New Roman').", required=False
+                ),
+                "font_color_rgb": Tool.ToolParameter(
+                    name="font_color_rgb", type="string",
+                    description="Set font color as a 6-digit hex RGB string (e.g., 'FF0000' for red).", required=False
+                )
+            }
+        )
+
+    def execute(self, file_path: str, paragraph_identifier: str, target_text: str,
+                  bold: Optional[bool] = None, italic: Optional[bool] = None, underline: Optional[bool] = None,
+                  font_size_pt: Optional[float] = None, font_name: Optional[str] = None, font_color_rgb: Optional[str] = None) -> str:
+
+        formatting_options = [bold, italic, underline, font_size_pt, font_name, font_color_rgb]
+        if all(opt is None for opt in formatting_options):
+            return "Error: At least one formatting option (bold, italic, underline, font_size_pt, font_name, font_color_rgb) must be provided."
+
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: File not found at '{file_path}'."
+
+            document = Document(file_path)
+            target_paragraph = None
+            identifier_type = "unknown"
+            found_paragraph = False
+
+            # Find the paragraph (copied logic from ModifyParagraphTool)
+            try:
+                para_index_1_based = int(paragraph_identifier)
+                if 1 <= para_index_1_based <= len(document.paragraphs):
+                    target_paragraph = document.paragraphs[para_index_1_based - 1]
+                    identifier_type = f"index {para_index_1_based}"
+                    found_paragraph = True
+                else:
+                    return f"Error: Paragraph index {para_index_1_based} is out of range (1 to {len(document.paragraphs)})."
+            except ValueError:
+                identifier_type = f"text '{paragraph_identifier}'"
+                for i, para in enumerate(document.paragraphs):
+                    if paragraph_identifier in para.text:
+                        target_paragraph = para
+                        identifier_type = f"text '{paragraph_identifier}' (found at index {i+1})"
+                        found_paragraph = True
+                        logger.info(f"Found paragraph containing text '{paragraph_identifier}' at index {i+1}.")
+                        break
+                if not found_paragraph:
+                    return f"Error: Could not find paragraph containing text: '{paragraph_identifier}'."
+
+            if not found_paragraph or target_paragraph is None:
+                return f"Error: Could not identify the paragraph using '{paragraph_identifier}'."
+
+            # Find runs containing the target text and apply formatting
+            runs_modified_count = 0
+            applied_formats = []
+            for run in target_paragraph.runs:
+                if target_text in run.text:
+                    font = run.font
+                    if bold is not None: font.bold = bold; applied_formats.append(f"bold={bold}")
+                    if italic is not None: font.italic = italic; applied_formats.append(f"italic={italic}")
+                    if underline is not None: font.underline = underline; applied_formats.append(f"underline={underline}")
+                    if font_size_pt is not None: font.size = Pt(font_size_pt); applied_formats.append(f"size={font_size_pt}pt")
+                    if font_name is not None: font.name = font_name; applied_formats.append(f"font='{font_name}'")
+                    if font_color_rgb is not None:
+                        try:
+                            # Basic validation for 6-digit hex
+                            if len(font_color_rgb) == 6 and all(c in '0123456789abcdefABCDEF' for c in font_color_rgb):
+                                font.color.rgb = RGBColor.from_string(font_color_rgb)
+                                applied_formats.append(f"color=#{font_color_rgb}")
+                            else:
+                                logger.warning(f"Invalid RGB color format: '{font_color_rgb}'. Must be 6-digit hex. Color not applied.")
+                                # Decide whether to error out or just skip color
+                                # return f"Error: Invalid RGB color format: '{font_color_rgb}'. Must be 6-digit hex."
+                        except Exception as color_e:
+                             logger.warning(f"Error applying RGB color '{font_color_rgb}': {color_e}. Color not applied.")
+                    runs_modified_count += 1
+                    logger.info(f"Applied formatting to run containing '{target_text}' in paragraph {identifier_type}.")
+                    # Note: This applies to the *entire run*. Splitting runs for partial text is complex.
+
+            if runs_modified_count == 0:
+                return f"Error: Text '{target_text}' not found within the identified paragraph ({identifier_type}). No formatting applied."
+
+            document.save(file_path)
+            format_summary = ", ".join(sorted(list(set(applied_formats)))) # Unique formats applied
+            return f"Successfully applied formatting ({format_summary}) to {runs_modified_count} run(s) containing '{target_text}' in paragraph {identifier_type} in '{file_path}'."
+
+        except Exception as e:
+            logger.exception(f"Error applying run formatting in Word document '{file_path}': {e}")
+            return f"Error applying run formatting in Word document '{file_path}': {e}"
+
+class ApplyParagraphFormattingTool(Tool):
+    """Applies uniform formatting to all runs within a specific paragraph."""
+    def __init__(self):
+        super().__init__(
+            name="apply_paragraph_formatting_in_word",
+            description=(
+                "Applies uniform formatting (bold, italic, underline, font size, font name, color) "
+                "to all text runs within a target paragraph (identified by index or contained text). "
+                "This affects the entire paragraph's text. Specify at least one formatting option."
+            ),
+            parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path", type="string",
+                    description="Path to the Word document.", required=True
+                ),
+                "paragraph_identifier": Tool.ToolParameter(
+                    name="paragraph_identifier", type="string",
+                    description="Identifier for the target paragraph (1-based index or unique contained text).", required=True
+                ),
+                # Formatting options are the same as ApplyRunFormattingTool
+                "bold": Tool.ToolParameter(
+                    name="bold", type="boolean",
+                    description="Apply bold formatting to the entire paragraph.", required=False
+                ),
+                "italic": Tool.ToolParameter(
+                    name="italic", type="boolean",
+                    description="Apply italic formatting to the entire paragraph.", required=False
+                ),
+                "underline": Tool.ToolParameter(
+                    name="underline", type="boolean",
+                    description="Apply underline formatting to the entire paragraph.", required=False
+                ),
+                "font_size_pt": Tool.ToolParameter(
+                    name="font_size_pt", type="number",
+                    description="Set font size in points for the entire paragraph.", required=False
+                ),
+                "font_name": Tool.ToolParameter(
+                    name="font_name", type="string",
+                    description="Set font name for the entire paragraph.", required=False
+                ),
+                "font_color_rgb": Tool.ToolParameter(
+                    name="font_color_rgb", type="string",
+                    description="Set font color (6-digit hex RGB) for the entire paragraph.", required=False
+                )
+            }
+        )
+
+    def execute(self, file_path: str, paragraph_identifier: str,
+                  bold: Optional[bool] = None, italic: Optional[bool] = None, underline: Optional[bool] = None,
+                  font_size_pt: Optional[float] = None, font_name: Optional[str] = None, font_color_rgb: Optional[str] = None) -> str:
+
+        formatting_options = [bold, italic, underline, font_size_pt, font_name, font_color_rgb]
+        if all(opt is None for opt in formatting_options):
+            return "Error: At least one formatting option must be provided."
+
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: File not found at '{file_path}'."
+
+            document = Document(file_path)
+            target_paragraph = None
+            identifier_type = "unknown"
+            found_paragraph = False
+
+            # Find the paragraph (copied logic from ModifyParagraphTool/ApplyRunFormattingTool)
+            try:
+                para_index_1_based = int(paragraph_identifier)
+                if 1 <= para_index_1_based <= len(document.paragraphs):
+                    target_paragraph = document.paragraphs[para_index_1_based - 1]
+                    identifier_type = f"index {para_index_1_based}"
+                    found_paragraph = True
+                else:
+                    return f"Error: Paragraph index {para_index_1_based} is out of range (1 to {len(document.paragraphs)})."
+            except ValueError:
+                identifier_type = f"text '{paragraph_identifier}'"
+                for i, para in enumerate(document.paragraphs):
+                    if paragraph_identifier in para.text:
+                        target_paragraph = para
+                        identifier_type = f"text '{paragraph_identifier}' (found at index {i+1})"
+                        found_paragraph = True
+                        logger.info(f"Found paragraph containing text '{paragraph_identifier}' at index {i+1}.")
+                        break
+                if not found_paragraph:
+                    return f"Error: Could not find paragraph containing text: '{paragraph_identifier}'."
+
+            if not found_paragraph or target_paragraph is None:
+                return f"Error: Could not identify the paragraph using '{paragraph_identifier}'."
+
+            # Apply formatting to all runs in the paragraph
+            applied_formats = []
+            if not target_paragraph.runs:
+                 logger.warning(f"Paragraph {identifier_type} has no runs (is empty?). Cannot apply formatting.")
+                 # Or potentially add an empty run and format it? Decided against it for now.
+
+            for run in target_paragraph.runs:
+                font = run.font
+                # Apply requested formatting unconditionally to each run
+                if bold is not None: font.bold = bold; applied_formats.append(f"bold={bold}")
+                if italic is not None: font.italic = italic; applied_formats.append(f"italic={italic}")
+                if underline is not None: font.underline = underline; applied_formats.append(f"underline={underline}")
+                if font_size_pt is not None: font.size = Pt(font_size_pt); applied_formats.append(f"size={font_size_pt}pt")
+                if font_name is not None: font.name = font_name; applied_formats.append(f"font='{font_name}'")
+                if font_color_rgb is not None:
+                    try:
+                        if len(font_color_rgb) == 6 and all(c in '0123456789abcdefABCDEF' for c in font_color_rgb):
+                            font.color.rgb = RGBColor.from_string(font_color_rgb)
+                            applied_formats.append(f"color=#{font_color_rgb}")
+                        else:
+                            logger.warning(f"Invalid RGB color format: '{font_color_rgb}'. Color not applied.")
+                            # Consider returning error if strictness is needed
+                    except Exception as color_e:
+                         logger.warning(f"Error applying RGB color '{font_color_rgb}': {color_e}. Color not applied to this run.")
+
+            document.save(file_path)
+            format_summary = ", ".join(sorted(list(set(applied_formats)))) # Unique formats applied
+            if not applied_formats: # Handle case where formatting failed (e.g., bad color format)
+                return f"Attempted to apply formatting to paragraph {identifier_type}, but no valid formats were specified or applied successfully in '{file_path}'."
+
+            logger.info(f"Applied uniform formatting ({format_summary}) to all runs in paragraph {identifier_type}.")
+            return f"Successfully applied uniform formatting ({format_summary}) to paragraph {identifier_type} in '{file_path}'."
+
+        except Exception as e:
+            logger.exception(f"Error applying paragraph formatting in Word document '{file_path}': {e}")
+            return f"Error applying paragraph formatting in Word document '{file_path}': {e}"
+
+class InsertParagraphTool(Tool):
+    """Inserts a new paragraph before or after a specified paragraph."""
+    def __init__(self):
+        super().__init__(
+            name="insert_paragraph_in_word",
+            description="Inserts a new paragraph with specified text either before or after a target paragraph (identified by index or contained text).",
+            parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path", type="string",
+                    description="Path to the Word document.", required=True
+                ),
+                "target_paragraph_identifier": Tool.ToolParameter(
+                    name="target_paragraph_identifier", type="string",
+                    description="Identifier for the target paragraph (1-based index or unique contained text) relative to which the new paragraph will be inserted.", required=True
+                ),
+                "text_to_insert": Tool.ToolParameter(
+                    name="text_to_insert", type="string",
+                    description="The text content of the new paragraph to insert.", required=True
+                ),
+                "insert_before": Tool.ToolParameter(
+                    name="insert_before", type="boolean",
+                    description="Set to true to insert before the target paragraph, false (or omit) to insert after.", required=False
+                ),
+                 "style": Tool.ToolParameter(
+                    name="style", type="string",
+                    description="Optional. Style for the new paragraph (e.g., 'Heading 1').", required=False
+                )
+            }
+        )
+
+    def execute(self, file_path: str, target_paragraph_identifier: str, text_to_insert: str,
+                  insert_before: bool = False, style: Optional[str] = None) -> str:
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: File not found at '{file_path}'."
+
+            document = Document(file_path)
+            target_paragraph = None
+            target_para_element = None
+            identifier_type = "unknown"
+            found_paragraph = False
+
+            # Find the paragraph and its element (slightly modified find logic)
+            try:
+                para_index_1_based = int(target_paragraph_identifier)
+                if 1 <= para_index_1_based <= len(document.paragraphs):
+                    target_paragraph = document.paragraphs[para_index_1_based - 1]
+                    target_para_element = target_paragraph._element
+                    identifier_type = f"index {para_index_1_based}"
+                    found_paragraph = True
+                else:
+                    return f"Error: Target paragraph index {para_index_1_based} is out of range (1 to {len(document.paragraphs)})."
+            except ValueError:
+                identifier_type = f"text '{target_paragraph_identifier}'"
+                for i, para in enumerate(document.paragraphs):
+                    if target_paragraph_identifier in para.text:
+                        target_paragraph = para
+                        target_para_element = para._element
+                        identifier_type = f"text '{target_paragraph_identifier}' (found at index {i+1})"
+                        found_paragraph = True
+                        logger.info(f"Found target paragraph containing text '{target_paragraph_identifier}' at index {i+1}.")
+                        break
+                if not found_paragraph:
+                    return f"Error: Could not find target paragraph containing text: '{target_paragraph_identifier}'."
+
+            if not found_paragraph or target_paragraph is None or target_para_element is None:
+                return f"Error: Could not identify the target paragraph using '{target_paragraph_identifier}'."
+
+            # Create the new paragraph element
+            new_para = document.add_paragraph(text_to_insert) # Add temporarily to end
+            style_applied_msg = ""
+            if style:
+                try:
+                    new_para.style = document.styles[style] # type: ignore
+                    style_applied_msg = f" with style '{style}'"
+                except KeyError:
+                    logger.warning(f"Style '{style}' not found, using default.")
+                    style_applied_msg = " (style not found, used default)"
+                except Exception as style_e:
+                    logger.warning(f"Error applying style '{style}': {style_e}. Using default.")
+                    style_applied_msg = f" (error applying style '{style}', used default)"
+
+            new_para_element = new_para._element # Get the OxmlElement of the new paragraph
+            # Remove the new paragraph from the end where add_paragraph placed it
+            new_para_element.getparent().remove(new_para_element)
+
+            # Insert the new paragraph element at the correct position
+            if insert_before:
+                target_para_element.addprevious(new_para_element)
+                position_desc = "before"
+            else:
+                target_para_element.addnext(new_para_element)
+                position_desc = "after"
+
+            document.save(file_path)
+            logger.info(f"Inserted paragraph '{text_to_insert}' {position_desc} paragraph {identifier_type}.")
+            return f"Successfully inserted paragraph '{text_to_insert}'{style_applied_msg} {position_desc} paragraph identified by {identifier_type} in '{file_path}'."
+
+        except Exception as e:
+            logger.exception(f"Error inserting paragraph in Word document '{file_path}': {e}")
+            return f"Error inserting paragraph in Word document '{file_path}': {e}"
+
+class DeleteParagraphTool(Tool):
+    """Deletes a specific paragraph from a Word document."""
+    def __init__(self):
+        super().__init__(
+            name="delete_paragraph_in_word",
+            description="Deletes a specific paragraph identified either by its 1-based index or by unique text it contains.",
+            parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path", type="string",
+                    description="Path to the Word document.", required=True
+                ),
+                "paragraph_identifier": Tool.ToolParameter(
+                    name="paragraph_identifier", type="string",
+                    description="Identifier for the paragraph to delete (1-based index or unique contained text).", required=True
+                )
+            }
+        )
+
+    def execute(self, file_path: str, paragraph_identifier: str) -> str:
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: File not found at '{file_path}'."
+
+            document = Document(file_path)
+            target_paragraph = None
+            target_para_element = None
+            identifier_type = "unknown"
+            found_paragraph = False
+            target_index = -1
+
+            # Find the paragraph and its element
+            try:
+                para_index_1_based = int(paragraph_identifier)
+                if 1 <= para_index_1_based <= len(document.paragraphs):
+                    target_index = para_index_1_based -1
+                    target_paragraph = document.paragraphs[target_index]
+                    target_para_element = target_paragraph._element
+                    identifier_type = f"index {para_index_1_based}"
+                    found_paragraph = True
+                else:
+                    return f"Error: Paragraph index {para_index_1_based} is out of range (1 to {len(document.paragraphs)})."
+            except ValueError:
+                identifier_type = f"text '{paragraph_identifier}'"
+                for i, para in enumerate(document.paragraphs):
+                    if paragraph_identifier in para.text:
+                        target_index = i
+                        target_paragraph = para
+                        target_para_element = para._element
+                        identifier_type = f"text '{paragraph_identifier}' (found at index {i+1})"
+                        found_paragraph = True
+                        logger.info(f"Found paragraph containing text '{paragraph_identifier}' at index {i+1}.")
+                        break
+                if not found_paragraph:
+                    return f"Error: Could not find paragraph containing text: '{paragraph_identifier}'."
+
+            if not found_paragraph or target_paragraph is None or target_para_element is None:
+                 return f"Error: Could not identify the paragraph to delete using '{paragraph_identifier}'."
+
+            # Delete the paragraph element from its parent
+            parent_element = target_para_element.getparent()
+            if parent_element is not None:
+                parent_element.remove(target_para_element)
+                # Note: This removes the paragraph from the XML. The document.paragraphs list
+                # might not immediately reflect this change until the document is reloaded.
+                # However, saving the document persists the deletion.
+                document.save(file_path)
+                logger.info(f"Deleted paragraph identified by {identifier_type} (original index {target_index+1}).")
+                return f"Successfully deleted paragraph identified by {identifier_type} from '{file_path}'."
+            else:
+                # This case should be rare for paragraphs in the main body
+                logger.error(f"Could not find parent element for paragraph {identifier_type} to delete.")
+                return f"Error: Could not delete paragraph {identifier_type} - parent element not found."
+
+        except Exception as e:
+            logger.exception(f"Error deleting paragraph in Word document '{file_path}': {e}")
+            return f"Error deleting paragraph in Word document '{file_path}': {e}"
+
+class DeleteTableTool(Tool):
+    """Deletes a specific table from a Word document."""
+    def __init__(self):
+        super().__init__(
+            name="delete_table_in_word",
+            description="Deletes a specific table identified by its 1-based index.",
+            parameters={
+                "file_path": Tool.ToolParameter(
+                    name="file_path", type="string",
+                    description="Path to the Word document.", required=True
+                ),
+                "table_index": Tool.ToolParameter(
+                    name="table_index", type="number",
+                    description="The 1-based index of the table to delete.", required=True
+                )
+            }
+        )
+
+    def execute(self, file_path: str, table_index: int) -> str:
+        try:
+            if not os.path.exists(file_path):
+                return f"Error: File not found at '{file_path}'."
+
+            document = Document(file_path)
+
+            # Validate table index
+            if not (1 <= table_index <= len(document.tables)):
+                return f"Error: Table index {table_index} is out of range (1 to {len(document.tables)})."
+
+            table_to_delete = document.tables[table_index - 1]
+            table_element = table_to_delete._element
+
+            # Delete the table element from its parent
+            parent_element = table_element.getparent()
+            if parent_element is not None:
+                parent_element.remove(table_element)
+                # Similar to paragraph deletion, saving persists the change.
+                document.save(file_path)
+                logger.info(f"Deleted table at index {table_index} from '{file_path}'.")
+                return f"Successfully deleted table at index {table_index} from '{file_path}'."
+            else:
+                 logger.error(f"Could not find parent element for table index {table_index} to delete.")
+                 return f"Error: Could not delete table at index {table_index} - parent element not found."
+
+        except Exception as e:
+            logger.exception(f"Error deleting table in Word document '{file_path}': {e}")
+            return f"Error deleting table in Word document '{file_path}': {e}"
+
+
+
 if __name__ == '__main__':
-    test_file_path = '/Users/xianlindeng/Downloads/乐农〔2025〕69号关于开展2024年度农业“两品”认定奖励申报工作的通知.docx'
-    # Check if the file exists before trying to open it
+    test_file_path = '/Users/xianlindeng/Downloads/乐农〔2025〕69号关于开展2024年度农业"两品"认定奖励申报工作的通知.docx'
+    # test_file_path_new = '/Users/xianlindeng/Downloads/test_document_created.docx'
+    # test_file_path_modify = '/Users/xianlindeng/Downloads/test_document_modify.docx'
+    # test_file_path_table = '/Users/xianlindeng/Downloads/test_document_table.docx'
+    # print("--- Testing Create ---")
+    # print(CreateWordTool().execute(test_file_path_new))
+
+    # print("\n--- Testing Add Paragraph (Existing File) ---")
+    # # Create a file first if it doesn't exist for modification tests
+    # if not os.path.exists(test_file_path_modify):
+    #     CreateWordTool().execute(test_file_path_modify)
+    # print(AddParagraphTool().execute(test_file_path_modify, "This is the first paragraph added.", style="Heading 1"))
+    # print(AddParagraphTool().execute(test_file_path_modify, "This is the second paragraph, with default style."))
+    # print(AddParagraphTool().execute(test_file_path_modify, "This paragraph tries an invalid style.", style="NonExistentStyle"))
+
+    # print("\n--- Testing Add Table (Existing File) ---")
+    # if not os.path.exists(test_file_path_table):
+    #      CreateWordTool().execute(test_file_path_table)
+    # print(AddTableTool().execute(test_file_path_table, rows=3, cols=4, style="Table Grid", header_row=["ID", "Name", "Value", "Status"]))
+    # print(AddTableTool().execute(test_file_path_table, rows=2, cols=2)) # Add another table without style/header
+
+    print("\n--- Testing Read (Original File) ---")
+    # Check if the original file exists before trying to open it
     if os.path.exists(test_file_path):
         print(
             ReadWordTool().execute(test_file_path)
@@ -545,3 +1528,52 @@ if __name__ == '__main__':
     else:
         print(f"Error: Test file not found at '{test_file_path}'")
         print("Please ensure the test file exists or update the path in the script.")
+
+# Update __main__ block for testing (Optional - commented out for safety)
+# if __name__ == '__main__':
+#     # Example Usage (requires test files in Downloads or adjust paths)
+#     base_path = os.path.expanduser("~/Downloads")
+#     create_path = os.path.join(base_path, "mrai_test_created.docx")
+#     para_path = os.path.join(base_path, "mrai_test_paragraphs.docx")
+#     table_path = os.path.join(base_path, "mrai_test_tables.docx")
+#     read_path = os.path.join(base_path, "乐农〔2025〕69号关于开展2024年度农业"两品"认定奖励申报工作的通知.docx") # Example existing file
+
+#     # Test Create
+#     print("--- Testing Create ---")
+#     creator = CreateWordTool()
+#     print(creator.execute(create_path))
+#     # Clean up created file
+#     # if os.path.exists(create_path): os.remove(create_path)
+
+#     # Test Add Paragraph
+#     print("\n--- Testing Add Paragraph ---")
+#     # Ensure file exists for adding paragraphs
+#     if not os.path.exists(para_path):
+#         creator.execute(para_path) # Create it first
+#     para_adder = AddParagraphTool()
+#     print(para_adder.execute(para_path, "First Paragraph - Heading 1", style="Heading 1"))
+#     print(para_adder.execute(para_path, "Second Paragraph - Normal Style"))
+#     print(para_adder.execute(para_path, "Third Paragraph - Invalid Style", style="FakeStyle123"))
+
+#     # Test Add Table
+#     print("\n--- Testing Add Table ---")
+#      # Ensure file exists for adding tables
+#     if not os.path.exists(table_path):
+#         creator.execute(table_path) # Create it first
+#     table_adder = AddTableTool()
+#     print(table_adder.execute(table_path, rows=4, cols=3, style="Light Shading Accent 1", header_row=["Col A", "Col B", "Col C"]))
+#     print(table_adder.execute(table_path, rows=2, cols=2)) # Add a default styled table
+
+#     # Test Read (use an existing file or one just created/modified)
+#     print("\n--- Testing Read ---")
+#     reader = ReadWordTool()
+#     # Try reading the table file we just modified
+#     if os.path.exists(table_path):
+#         print(f"\nReading: {table_path}")
+#         print(reader.execute(table_path))
+#     # Try reading the original example file if it exists
+#     elif os.path.exists(read_path):
+#         print(f"\nReading: {read_path}")
+#         print(reader.execute(read_path))
+#     else:
+#         print(f"\nSkipping Read test - Neither '{table_path}' nor '{read_path}' found.")

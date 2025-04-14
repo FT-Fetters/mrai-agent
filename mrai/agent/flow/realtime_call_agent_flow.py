@@ -49,21 +49,28 @@ class RealtimeCallAgentFlow(BaseFlow):
         content_cache = ""
         observation = {}
         async for chunk in stream_generator:
-            formatted_chunk = await self.handle_chunk(chunk)
-            if formatted_chunk["type"] == "content":
-                content_cache += formatted_chunk["content"]
-            else:
-                other_content_cache += formatted_chunk["content"]
-            await self.handle_formatted_chunk(formatted_chunk)
-            interruption, tool_call = await self.after_new_chunk(content_cache, other_content_cache)
-            if interruption:
-                terminate, tool_call_result = await self.handle_tool_call(tool_call)
+            try:
+                formatted_chunk = await self.handle_chunk(chunk)
+                if formatted_chunk["type"] == "content":
+                    content_cache += formatted_chunk["content"]
+                else:
+                    other_content_cache += formatted_chunk["content"]
+                await self.handle_formatted_chunk(formatted_chunk)
+                interruption, tool_call = await self.after_new_chunk(content_cache, other_content_cache)
+                if interruption:
+                    terminate, tool_call_result = await self.handle_tool_call(tool_call)
+                    observation = {
+                        "tool_call": tool_call,
+                        "tool_call_result": tool_call_result
+                    }
+                    if terminate:
+                        return
+                    break
+            except Exception as e:
+                logger.exception(f"Error handling chunk: {e}")
                 observation = {
-                    "tool_call": tool_call,
-                    "tool_call_result": tool_call_result
+                    "error": str(e)
                 }
-                if terminate:
-                    return
                 break
             
         self.organize_memory(content_cache, observation, self.memory)
@@ -138,9 +145,23 @@ class RealtimeCallAgentFlow(BaseFlow):
         tool_call = tool_call_match.group(1)
         # print(tool_call)
         # 去掉 // 和 /* */ 注释
-        tool_call = re.sub(r'//.*?\n', '\n', tool_call)  # 去掉 //
+        # Remove /* */ comments first
         tool_call = re.sub(r'/\*.*?\*/', '', tool_call, flags=re.DOTALL)  # 去掉 /* */
-        tool_call = json.loads(tool_call)
+        # Remove // comments only if they appear at the start of a line (ignoring leading whitespace)
+        tool_call = re.sub(r'^\s*//.*', '', tool_call, flags=re.MULTILINE)
+        # Remove empty lines that might result from comment removal
+        tool_call = "\n".join(line for line in tool_call.splitlines() if line.strip())
+        
+        try:
+            tool_call = json.loads(tool_call)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse tool_call JSON after comment removal: {e}")
+            logger.debug(f"Original content with comments:\n{tool_call_match.group(1)}")
+            logger.debug(f"Content after comment removal attempt:\n{tool_call}")
+            # Return error instead of raising exception or returning False, {}
+            # Let the handle_tool_call function decide what to do with the parse failure
+            return True, {"error": f"Failed to parse tool call JSON: {e}", "raw_content": tool_call_match.group(1)}
+
         return True, tool_call
     
     async def handle_tool_call(self, tool_call: dict) -> tuple[bool, dict]:
@@ -150,6 +171,14 @@ class RealtimeCallAgentFlow(BaseFlow):
             - bool: Is terminate
             - dict: The result of the tool call.
         """
+        # Check if the tool_call itself indicates a parsing error from after_new_chunk
+        if isinstance(tool_call, dict) and "error" in tool_call and "Failed to parse tool call JSON" in tool_call["error"]:
+             return False, {
+                "success": False,
+                "error": tool_call["error"],
+                "raw_content": tool_call.get("raw_content")
+            }
+
         if tool_call.get("name") == "terminate":
             return True, {}
         logger.info(f"Tool call: {tool_call}")
