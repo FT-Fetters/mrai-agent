@@ -550,7 +550,7 @@ class FormatCellRangeTool(Tool):
     def __init__(self):
         super().__init__(
             name="format_cell_range",
-            description="Sets the format for a range of cells in an Excel file.",
+            description="Sets the format for a range of cells in an Excel file, including font, alignment, background, borders, column width, and row height.",
             parameters={
                 "file_path": Tool.ToolParameter(
                     name="file_path", description="Path to the Excel file.", type="string", required=True
@@ -591,6 +591,28 @@ class FormatCellRangeTool(Tool):
                 "vertical_alignment": Tool.ToolParameter(
                     name="vertical_alignment", description="Vertical alignment ('top', 'center', 'bottom', 'justify', 'distributed').", type="string", required=False
                 ),
+                "border_style": Tool.ToolParameter(
+                    name="border_style", description="Border style ('thin', 'medium', 'thick', 'dotted', 'dashed', etc.). Applies to sides specified in border_sides.", type="string", required=False
+                ),
+                "border_color": Tool.ToolParameter(
+                    name="border_color",
+                    description="Border color as hex code (e.g., '000000' for black). Applies to sides specified in border_sides.",
+                    type="string",
+                    required=False
+                ),
+                "border_sides": Tool.ToolParameter(
+                    name="border_sides",
+                    description="Sides to apply border ('all', 'outline', 'top', 'bottom', 'left', 'right', or a comma-separated list like 'top,bottom'). Default is 'all' if border_style is set.",
+                    type="enum",
+                    enum=["all", "outline", "top", "bottom", "left", "right"],
+                    required=False
+                ),
+                "column_width": Tool.ToolParameter(
+                    name="column_width", description="Set width for all columns in the range.", type="number", required=False
+                ),
+                "row_height": Tool.ToolParameter(
+                    name="row_height", description="Set height for all rows in the range.", type="number", required=False
+                ),
             }
         )
 
@@ -598,7 +620,9 @@ class FormatCellRangeTool(Tool):
                 font_name: Optional[str] = None, font_size: Optional[int] = None,
                 bold: Optional[bool] = None, italic: Optional[bool] = None, underline: Optional[str] = None,
                 font_color: Optional[str] = None, background_color: Optional[str] = None,
-                horizontal_alignment: Optional[str] = None, vertical_alignment: Optional[str] = None):
+                horizontal_alignment: Optional[str] = None, vertical_alignment: Optional[str] = None,
+                border_style: Optional[str] = None, border_color: Optional[str] = None,
+                border_sides: str = "all", column_width: Optional[float] = None, row_height: Optional[float] = None):
         wb = None
         try:
             if not os.path.exists(file_path):
@@ -624,6 +648,44 @@ class FormatCellRangeTool(Tool):
             except Exception as e:
                  return f"Error parsing range '{start_cell}:{end_cell}': {str(e)}"
 
+            # --- Prepare Border Object (if specified) ---
+            border = None
+            apply_border_top = False
+            apply_border_bottom = False
+            apply_border_left = False
+            apply_border_right = False
+
+            if border_style:
+                try:
+                    # Suppress type checking for style as openpyxl expects specific literals
+                    side = Side(style=border_style, color=border_color) # type: ignore 
+                    
+                    sides_to_apply = set(s.strip().lower() for s in border_sides.split(',')) if border_sides else {'all'}
+
+                    if 'all' in sides_to_apply:
+                         apply_border_top = apply_border_bottom = apply_border_left = apply_border_right = True
+                    elif 'outline' in sides_to_apply:
+                        # Outline needs special handling per cell below
+                         apply_border_top = apply_border_bottom = apply_border_left = apply_border_right = True # Flag for outline logic
+                    else:
+                        if 'top' in sides_to_apply: apply_border_top = True
+                        if 'bottom' in sides_to_apply: apply_border_bottom = True
+                        if 'left' in sides_to_apply: apply_border_left = True
+                        if 'right' in sides_to_apply: apply_border_right = True
+
+                    # Create a base border object. We'll modify it per cell if needed for 'outline'.
+                    if 'outline' not in sides_to_apply:
+                         border = Border(
+                             left=side if apply_border_left else None,
+                             right=side if apply_border_right else None,
+                             top=side if apply_border_top else None,
+                             bottom=side if apply_border_bottom else None
+                         )
+
+                except Exception as border_error:
+                     return f"Error creating border style: {str(border_error)}. Valid styles include 'thin', 'medium', 'thick', etc."
+
+
             # --- Iterate and Apply Formatting ---
             for row_idx in range(start_row_num, end_row_num + 1):
                  for col_idx in range(start_col_idx, end_col_idx + 1):
@@ -632,19 +694,33 @@ class FormatCellRangeTool(Tool):
 
                         # --- Apply Font Formatting ---
                         current_font = target_cell.font
+                        
+                        # Determine the correct color value/object
+                        final_font_color = None
+                        if font_color is not None:
+                            try:
+                                final_font_color = Color(rgb=font_color) # Create Color object from hex
+                            except ValueError:
+                                return f"Error: Invalid font_color hex code '{font_color}'"
+                        elif current_font.color:
+                            final_font_color = current_font.color # Use existing Color object directly
+
                         new_font = Font(name=font_name if font_name is not None else current_font.name,
                                       size=font_size if font_size is not None else current_font.size,
                                       bold=bold if bold is not None else current_font.bold, # Apply if specified
                                       italic=italic if italic is not None else current_font.italic, # Apply if specified
                                       underline=underline if underline is not None else current_font.underline, # type: ignore
-                                      color=font_color if font_color is not None else current_font.color)
+                                      color=final_font_color) # Assign the Color object or None
                         target_cell.font = new_font
+
 
                         # --- Apply Background Fill ---
                         if background_color:
-                            fill = PatternFill(start_color=background_color, end_color=background_color, fill_type="solid")
-                            target_cell.fill = fill
-
+                            try:
+                                fill = PatternFill(start_color=background_color, end_color=background_color, fill_type="solid")
+                                target_cell.fill = fill
+                            except ValueError:
+                                return f"Error: Invalid background_color hex code '{background_color}'"
                         # --- Apply Alignment ---
                         current_alignment = target_cell.alignment
                         new_alignment = Alignment(horizontal=horizontal_alignment if horizontal_alignment is not None else current_alignment.horizontal,
@@ -655,14 +731,63 @@ class FormatCellRangeTool(Tool):
                                                 indent=current_alignment.indent)
                         target_cell.alignment = new_alignment
 
+                        # --- Apply Border ---
+                        if border_style:
+                             current_border = target_cell.border # Get existing border
+                             
+                             if 'outline' in sides_to_apply:
+                                  # For outline, apply only to the outer edges of the range
+                                  cell_border = Border(
+                                      left=side if apply_border_left and col_idx == start_col_idx else current_border.left,
+                                      right=side if apply_border_right and col_idx == end_col_idx else current_border.right,
+                                      top=side if apply_border_top and row_idx == start_row_num else current_border.top,
+                                      bottom=side if apply_border_bottom and row_idx == end_row_num else current_border.bottom
+                                  )
+                                  target_cell.border = cell_border
+                             elif border: # Apply pre-calculated border for 'all' or specific sides
+                                  # Combine new sides with existing ones if necessary
+                                  target_cell.border = Border(
+                                      left=border.left if border.left else current_border.left,
+                                      right=border.right if border.right else current_border.right,
+                                      top=border.top if border.top else current_border.top,
+                                      bottom=border.bottom if border.bottom else current_border.bottom
+                                  )
+
+
                     except Exception as cell_error:
                          cell_coord = f"{get_column_letter(col_idx)}{row_idx}"
                          return f"Error formatting cell {cell_coord}: {str(cell_error)}"
+
+
+            # --- Apply Column Width ---
+            if column_width is not None:
+                try:
+                    if column_width <= 0:
+                         return f"Error: column_width must be positive."
+                    for col_idx in range(start_col_idx, end_col_idx + 1):
+                         col_letter = get_column_letter(col_idx)
+                         sheet.column_dimensions[col_letter].width = column_width
+                except Exception as width_error:
+                     return f"Error setting column width: {str(width_error)}"
+
+
+            # --- Apply Row Height ---
+            if row_height is not None:
+                try:
+                    if row_height <= 0:
+                         return f"Error: row_height must be positive."
+                    for row_idx in range(start_row_num, end_row_num + 1):
+                         sheet.row_dimensions[row_idx].height = row_height
+                except Exception as height_error:
+                    return f"Error setting row height: {str(height_error)}"
+
 
             wb.save(file_path)
             return f"Successfully formatted cell range {start_cell}:{end_cell} in sheet '{sheet_name}' of file '{file_path}'"
 
         except Exception as e:
+            # import traceback # Uncomment for debugging
+            # traceback.print_exc() # Uncomment for debugging
             return f"Error formatting cell range: {str(e)}"
         finally:
             if wb:

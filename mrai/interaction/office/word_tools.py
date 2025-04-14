@@ -6,11 +6,12 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml.ns import qn
 # from docx.oxml import OxmlElement # Not used directly now
 # import docx.opc.constants # Not used
+from docx.shared import Twips # <<< CORRECTED IMPORT for width conversion
 from loguru import logger
 import os # <<< ADDED IMPORT
 
 # <<< ADDED IMPORTs for table/cell formatting
-from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.enum.table import WD_ALIGN_VERTICAL, WD_ROW_HEIGHT_RULE
 # Removed redundant: from docx.oxml.shared import qn (Ensuring this is removed)
 
 from mrai.agent.schema import Tool
@@ -163,11 +164,33 @@ class ReadWordTool(Tool):
             style_name = table.style.name
         output.append(f"Table Style: '{style_name}'")
 
+        # <<< ADDED: Check for table-level borders
+        try:
+            tblPr = table._tbl.tblPr
+            if tblPr is not None:
+                # Safely find the tblBorders element
+                tblBorders_element = tblPr.find(qn('w:tblBorders'))
+                if tblBorders_element is not None:
+                    # Check for common border types by looking for child elements
+                    has_borders = any(
+                        tblBorders_element.find(qn(f'w:{tag}')) is not None
+                        for tag in ['top', 'bottom', 'left', 'right', 'insideH', 'insideV']
+                    )
+                    if has_borders:
+                        output.append("Table Borders: Defined (specific styles vary)")
+        except Exception as e:
+            logger.debug(f"Could not check table-level borders for table {index}: {e}")
+        # >>> END ADDED
+
         output.append(f"(Approximate Columns: {num_cols}, Rows: {len(table.rows)})\n")
 
-        formatting_notes = [] # Store formatting notes (row_idx, col_idx, note)
+        formatting_notes = [] # Store formatting notes (row_idx, col_idx_or_0, note)
 
         if num_cols > 0 and table.rows:
+            # <<< ADDED: Process header row height
+            self._add_row_formatting_notes(table.rows[0], 1, formatting_notes)
+            # >>> END ADDED
+
             # Build Markdown table header from first row
             header_cells_text = []
             first_row_cells = table.rows[0].cells
@@ -222,6 +245,10 @@ class ReadWordTool(Tool):
 
             # Fill table content (iterate through rows *starting from the second row*)
             for row_idx, row in enumerate(table.rows[1:], start=1): # Start from row index 1 (second row)
+                # <<< ADDED: Process data row height
+                self._add_row_formatting_notes(row, row_idx + 1, formatting_notes)
+                # >>> END ADDED
+
                 row_content = []
                 cells_to_process = row.cells
                 col_idx_actual = 0 # Index for accessing cells_to_process
@@ -282,43 +309,106 @@ class ReadWordTool(Tool):
         # Add formatting notes if any were collected
         if formatting_notes:
              output.append("\n**Formatting Notes:**")
+             # Sort notes primarily by row, then by column (0 for row notes first)
+             formatting_notes.sort(key=lambda x: (x[0], x[1]))
              for r, c, note in formatting_notes:
-                 output.append(f"*   Row {r}, Col {c}: {note}")
+                 if c == 0: # Row-specific note
+                     output.append(f"*   Row {r}: {note}")
+                 else: # Cell-specific note
+                      output.append(f"*   Row {r}, Col {c}: {note}")
 
 
         output.append("\n---")
         return "\n".join(output)
 
+    def _add_row_formatting_notes(self, row, row_idx_1_based, notes):
+        """Helper to extract and add row height formatting notes."""
+        try:
+            height = row.height
+            height_rule = row.height_rule
+
+            rule_str = None
+            if height_rule is not None and height_rule != WD_ROW_HEIGHT_RULE.AUTO:
+                # Get the rule name from the enum value
+                try:
+                    rule_str = WD_ROW_HEIGHT_RULE(height_rule).name
+                except ValueError:
+                    rule_str = str(height_rule) # Fallback to raw value
+
+            height_str = None
+            if height is not None:
+                 # height is in Twips, convert to points
+                 height_pt = height.pt # Direct conversion using .pt attribute
+                 height_str = f"{height_pt:.1f}pt"
+
+
+            # Add note only if there's non-default info
+            if height_str or rule_str:
+                note_parts = []
+                if height_str:
+                    note_parts.append(f"Height={height_str}")
+                if rule_str:
+                    note_parts.append(f"Rule={rule_str}")
+                # Use column 0 to signify a row-level note
+                notes.append((row_idx_1_based, 0, ", ".join(note_parts)))
+
+        except Exception as e:
+            logger.debug(f"Could not get row height/rule for row index {row_idx_1_based}: {e}")
+
     def _add_cell_formatting_notes(self, cell, row_idx, col_idx, notes):
         """Helper to extract and add cell formatting notes."""
-        # Horizontal Alignment (from first paragraph if possible)
+        tcPr = cell._tc.tcPr # Get cell properties element once
+
+        # --- Text Formatting (First Run) ---
+        try:
+            if cell.paragraphs and cell.paragraphs[0].runs:
+                first_run = cell.paragraphs[0].runs[0]
+                if first_run.text.strip(): # Only if the run has text
+                    run_format = self._get_run_formatting(first_run)
+                    # Format details concisely
+                    size_str = self._format_value(run_format['font_size_pt'], "pt", 1)
+                    font_name_str = run_format['font_name'] if run_format['font_name'] else 'Default'
+
+                    rgb_color = run_format['font_color_rgb']
+                    color_str = 'Default'
+                    if isinstance(rgb_color, RGBColor):
+                        try:
+                            color_str = f"#{rgb_color[0]:02X}{rgb_color[1]:02X}{rgb_color[2]:02X}"
+                        except (TypeError, IndexError, ValueError): pass # Keep default on error
+                    elif rgb_color is not None: pass # Keep default for unexpected
+
+                    format_parts = [f"Font='{font_name_str}'", f"Size={size_str}"]
+                    if color_str != 'Default': format_parts.append(f"Color={color_str}")
+                    if run_format['bold']: format_parts.append("Bold")
+                    if run_format['italic']: format_parts.append("Italic")
+                    if run_format['underline']: format_parts.append("Underline")
+                    notes.append((row_idx, col_idx, f"Text Format (Start): {', '.join(format_parts)}"))
+        except Exception as e:
+            logger.debug(f"Could not get cell text formatting for R{row_idx}C{col_idx}: {e}")
+
+
+        # --- Horizontal Alignment ---
         try:
             if cell.paragraphs:
-                # Paragraph alignment is inherited, check direct setting first
                 first_para_align = cell.paragraphs[0].alignment
-                # Fallback to paragraph style alignment?
-                # This can get complex, sticking to direct alignment for now.
                 if first_para_align is not None:
-                    # Correct way to get enum name as string
                     align_str = str(first_para_align).split('.')[-1]
                     if align_str != 'LEFT': # LEFT is usually default
-                         notes.append((row_idx, col_idx, f"Alignment={align_str}"))
+                        notes.append((row_idx, col_idx, f"Alignment={align_str}"))
         except Exception as e:
              logger.debug(f"Could not get cell paragraph alignment for R{row_idx}C{col_idx}: {e}")
 
-        # Vertical Alignment
+
+        # --- Vertical Alignment ---
         try:
             # Access vertical alignment via cell properties (tcPr -> vAlign)
-            tcPr = cell._tc.tcPr
+            # tcPr = cell._tc.tcPr # Already defined above
             v_align = None
             if tcPr is not None:
                 v_align_elem = tcPr.vAlign
                 if v_align_elem is not None and v_align_elem.val is not None:
                     v_align = v_align_elem.val # This is usually the enum value like 'center', 'top', etc.
-                    # Use WD_ALIGN_VERTICAL for comparison if needed, but value is often string
 
-            # Check if alignment is non-default (TOP)
-            # Ensure comparison handles both enum value and string representation if necessary
             is_top = False
             if isinstance(v_align, int): # Check if it's the integer enum value
                 is_top = (v_align == WD_ALIGN_VERTICAL.TOP)
@@ -331,8 +421,44 @@ class ReadWordTool(Tool):
         except Exception as e:
              logger.debug(f"Could not get cell vertical alignment for R{row_idx}C{col_idx}: {e}")
 
-         # Note: Detecting borders and shading requires deeper XML parsing (tc.tcPr elements)
-         # and might be too complex/verbose for this tool's summary.
+        # --- Cell Width ---
+        try:
+             if tcPr is not None:
+                 tcW = tcPr.tcW # Get width element
+                 if tcW is not None and tcW.w is not None:
+                     width_val = tcW.w
+                     width_type = tcW.type
+                     if width_type == 'dxa': # Twentieths of a point
+                         width_pt = width_val / 20.0
+                         notes.append((row_idx, col_idx, f"Width={width_pt:.1f}pt"))
+                     elif width_type == 'pct': # Percentage
+                         notes.append((row_idx, col_idx, f"Width={width_val}%"))
+                     elif width_type == 'auto' or width_type is None:
+                         notes.append((row_idx, col_idx, "Width=Auto"))
+                     else: # Other types?
+                          notes.append((row_idx, col_idx, f"Width={width_val} ({width_type})"))
+        except Exception as e:
+              logger.debug(f"Could not get cell width for R{row_idx}C{col_idx}: {e}")
+
+        # --- Cell Borders ---
+        try:
+             if tcPr is not None:
+                 # Safely find the tcBorders element
+                 tcBorders_element = tcPr.find(qn('w:tcBorders'))
+                 if tcBorders_element is not None:
+                     # Check if any specific border element exists
+                     has_specific_borders = any(
+                         tcBorders_element.find(qn(f'w:{tag}')) is not None
+                         # We just check for existence, value check might be too complex here
+                         for tag in ['top', 'bottom', 'left', 'right'] # Others like tl2br? maybe keep simple
+                             # Note: insideH/V might not be typical on tcBorders, mostly on tblBorders
+                     )
+                     if has_specific_borders:
+                         notes.append((row_idx, col_idx, "Has Specific Borders"))
+        except Exception as e:
+              logger.debug(f"Could not check cell borders for R{row_idx}C{col_idx}: {e}")
+
+         # Note: Detecting shading requires deeper XML parsing (tcPr -> shd)
 
     def execute(self, file_path: str) -> str:
         """
