@@ -113,13 +113,19 @@ class LLM:
                     indent=2
                 ))
             })
+
+        # Prepare conditional arguments
+        extra_params = {}
+        if self.config.reasoning_effort is not None:
+            extra_params["reasoning_effort"] = self.config.reasoning_effort
+
         async for chunk in await self.client.chat.completions.create(
             model=self.config.model,
             messages=dict_messages,
             temperature=self.config.temperature,
             max_tokens=self.config.max_tokens,
             stream=True,
-            reasoning_effort=self.config.reasoning_effort
+            **extra_params # Unpack only the conditional parameters
         ):
             if chunk.choices[0].delta.content:
                 if flag:
