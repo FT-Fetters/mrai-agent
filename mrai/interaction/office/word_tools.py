@@ -583,11 +583,11 @@ class CreateWordTool(Tool):
             return f"Error creating Word document at '{file_path}': {e}"
 
 class AddParagraphTool(Tool):
-    """Adds a paragraph to the end of a Word document."""
+    """Adds one or more paragraphs to the end of a Word document."""
     def __init__(self):
         super().__init__(
-            name="add_paragraph_to_word",
-            description="Adds a new paragraph with the specified text to the end of an existing Word document. Optionally applies a built-in style.",
+            name="add_paragraphs_to_word",
+            description="Adds one or more new paragraphs with the specified text to the end of an existing Word document. Optionally applies a single built-in style to all added paragraphs.",
             parameters={
                 "file_path": Tool.ToolParameter(
                     name="file_path",
@@ -595,29 +595,29 @@ class AddParagraphTool(Tool):
                     description="The path to the Word document file to modify.",
                     required=True
                 ),
-                "text": Tool.ToolParameter(
-                    name="text",
-                    type="string",
-                    description="The text content of the new paragraph.",
+                "paragraph_list": Tool.ToolParameter(
+                    name="paragraph_list",
+                    type="list",
+                    description="A list of strings, where each string is the text content for a new paragraph.",
                     required=True
                 ),
                 "style": Tool.ToolParameter(
                     name="style",
                     type="string",
-                    description="Optional. The name of a built-in Word style to apply (e.g., 'Heading 1', 'Body Text', 'Normal'). If omitted or invalid, default paragraph style is used.",
+                    description="Optional. The name of a built-in Word style to apply to ALL added paragraphs (e.g., 'Heading 1', 'Body Text'). If omitted or invalid, default paragraph style is used.",
                     required=False
                 )
             }
         )
 
-    def execute(self, file_path: str, text: str, style: Optional[str] = None) -> str:
+    def execute(self, file_path: str, paragraph_list: List[str], style: Optional[str] = None) -> str:
         """
-        Adds a paragraph to a Word document.
+        Adds one or more paragraphs to a Word document.
 
         Args:
             file_path (str): Path to the document.
-            text (str): Text to add.
-            style (Optional[str]): Style name to apply.
+            paragraph_list (List[str]): List of text strings to add as paragraphs.
+            style (Optional[str]): Style name to apply to all added paragraphs.
 
         Returns:
             str: Confirmation or error message.
@@ -625,35 +625,50 @@ class AddParagraphTool(Tool):
         try:
             if not os.path.exists(file_path):
                 return f"Error: File not found at '{file_path}'. Use create_word_document first if needed."
+            if not isinstance(paragraph_list, list) or not all(isinstance(item, str) for item in paragraph_list):
+                 return "Error: 'paragraph_list' must be a list of strings."
+            if not paragraph_list:
+                 return "Error: 'paragraph_list' cannot be empty."
+
 
             document = Document(file_path)
+            style_applied_msg = ""
+            paragraphs_added_count = 0
 
-            # Add the paragraph with optional style
-            paragraph = document.add_paragraph(text)
+            # Process style check once
+            valid_style = None
+            style_warning = ""
             if style:
                 try:
-                    # Check if the style exists in the document's known styles
-                    # Note: This is a basic check; truly validating requires more complex checks or handling potential errors.
-                    # python-docx doesn't provide a direct way to list all available built-in style names easily without introspection.
-                    paragraph.style = document.styles[style] # type: ignore
+                    # Check if the style exists
+                    valid_style = document.styles[style] # type: ignore
                     style_applied_msg = f" with style '{style}'"
                 except KeyError:
-                    logger.warning(f"Style '{style}' not found in document styles. Using default paragraph style.")
-                    style_applied_msg = f" (Warning: Style '{style}' not found, used default)"
-                except Exception as style_e: # Catch other potential style errors
-                    logger.warning(f"Error applying style '{style}': {style_e}. Using default paragraph style.")
-                    style_applied_msg = f" (Warning: Error applying style '{style}', used default)"
+                    logger.warning(f"Style '{style}' not found in document styles. Using default paragraph style for all added paragraphs.")
+                    style_warning = f" (Warning: Style '{style}' not found, used default)"
+                except Exception as style_e:
+                    logger.warning(f"Error accessing style '{style}': {style_e}. Using default paragraph style.")
+                    style_warning = f" (Warning: Error accessing style '{style}', used default)"
             else:
-                style_applied_msg = ""
+                 style_applied_msg = ""
+
+
+            # Add each paragraph from the list
+            for text in paragraph_list:
+                 paragraph = document.add_paragraph(text)
+                 if valid_style: # Apply pre-validated style if available
+                      paragraph.style = valid_style # type: ignore
+                 paragraphs_added_count += 1
 
 
             document.save(file_path)
-            logger.info(f"Successfully added paragraph to '{file_path}'{style_applied_msg}.")
-            return f"Successfully added paragraph to '{file_path}'{style_applied_msg}."
+            final_style_message = style_applied_msg + style_warning
+            logger.info(f"Successfully added {paragraphs_added_count} paragraph(s) to '{file_path}'{final_style_message}.")
+            return f"Successfully added {paragraphs_added_count} paragraph(s) to '{file_path}'{final_style_message}."
 
         except Exception as e:
-            logger.exception(f"Error adding paragraph to Word document '{file_path}': {e}")
-            return f"Error adding paragraph to Word document '{file_path}': {e}"
+            logger.exception(f"Error adding paragraphs to Word document '{file_path}': {e}")
+            return f"Error adding paragraphs to Word document '{file_path}': {e}"
 
 
 class AddTableTool(Tool):
@@ -898,11 +913,11 @@ class ModifyParagraphTool(Tool):
 
 
 class ModifyTableCellTool(Tool):
-    """Modifies the text content of a specific cell in a table within a Word document."""
+    """Modifies the text content of specific cells in a table within a Word document."""
     def __init__(self):
         super().__init__(
-            name="modify_table_cell_in_word",
-            description="Modifies the text content of a specific cell within a table in a Word document. The table and cell are identified by their 1-based indices.",
+            name="modify_table_cells_in_word",
+            description="Modifies the text content of one or more specific cells within a table in a Word document. Table and cells are identified by their 1-based indices.",
             parameters={
                 "file_path": Tool.ToolParameter(
                     name="file_path",
@@ -916,41 +931,36 @@ class ModifyTableCellTool(Tool):
                     description="The 1-based index of the table within the document.",
                     required=True
                 ),
-                "row_index": Tool.ToolParameter(
-                    name="row_index",
-                    type="number",
-                    description="The 1-based index of the row within the table.",
+                "cell_modifications": Tool.ToolParameter(
+                    name="cell_modifications",
+                    type="list",
+                    description="A list of dictionaries, where each dictionary specifies a cell to modify. Each dictionary must contain 'row_index' (number, 1-based), 'col_index' (number, 1-based), and 'new_text' (string).",
                     required=True
-                ),
-                "col_index": Tool.ToolParameter(
-                    name="col_index",
-                    type="number",
-                    description="The 1-based index of the column within the row.",
-                    required=True
-                ),
-                "new_text": Tool.ToolParameter(
-                    name="new_text",
-                    type="string",
-                    description="The new text content for the specified cell.",
-                    required=True
+                    # Example item: {"row_index": 1, "col_index": 2, "new_text": "Updated Value"}
                 )
+                # Removed individual row_index, col_index, new_text parameters
             }
         )
 
-    def execute(self, file_path: str, table_index: int, row_index: int, col_index: int, new_text: str) -> str:
+    def execute(self, file_path: str, table_index: int, cell_modifications: List[Dict]) -> str:
         """
-        Modifies the text in a table cell.
+        Modifies the text in multiple table cells.
 
         Args:
             file_path (str): Path to the document.
             table_index (int): 1-based index of the table.
-            row_index (int): 1-based index of the row.
-            col_index (int): 1-based index of the column.
-            new_text (str): New text for the cell.
+            cell_modifications (List[Dict]): A list of modifications.
+                Each dict must have:
+                    'row_index' (int): 1-based row index.
+                    'col_index' (int): 1-based column index.
+                    'new_text' (str): New text for the cell.
 
         Returns:
-            str: Confirmation or error message.
+            str: Confirmation or error message summarizing the batch operation.
         """
+        if not isinstance(cell_modifications, list) or not cell_modifications:
+            return "Error: 'cell_modifications' must be a non-empty list of modification dictionaries."
+
         try:
             if not os.path.exists(file_path):
                 return f"Error: File not found at '{file_path}'."
@@ -962,57 +972,96 @@ class ModifyTableCellTool(Tool):
                 return f"Error: Table index {table_index} is out of range (1 to {len(document.tables)})."
             table = document.tables[table_index - 1]
 
-            # Validate row index
-            if not (1 <= row_index <= len(table.rows)):
-                return f"Error: Row index {row_index} is out of range (1 to {len(table.rows)}) for table {table_index}."
-            row = table.rows[row_index - 1]
+            success_count = 0
+            fail_count = 0
+            error_messages = []
 
-            # Validate column index
-            if not (1 <= col_index <= len(row.cells)):
-                 # Note: This uses the actual cell count in the specific row, which can vary due to merged cells.
-                 # A more robust approach might consider the table's intended column count if merged cells are common.
-                 return f"Error: Column index {col_index} is out of range (1 to {len(row.cells)}) for table {table_index}, row {row_index}."
-            cell = row.cells[col_index - 1]
+            for mod_info in cell_modifications:
+                if not isinstance(mod_info, dict) or not all(k in mod_info for k in ['row_index', 'col_index', 'new_text']):
+                    fail_count += 1
+                    error_messages.append("Invalid format in cell_modifications list (missing keys).")
+                    logger.warning("Skipping invalid modification item: Missing keys.")
+                    continue
 
-            # --- Try to preserve formatting from the first run of the first paragraph --- START
-            original_font = None
-            first_paragraph = None
-            if cell.paragraphs:
-                first_paragraph = cell.paragraphs[0]
-                if first_paragraph.runs:
-                    original_font = first_paragraph.runs[0].font
-            # --- Try to preserve formatting --- END
+                try:
+                    row_index = int(mod_info['row_index'])
+                    col_index = int(mod_info['col_index'])
+                    new_text = str(mod_info['new_text']) # Ensure text is string
 
-            # Clear cell content by replacing text in the first paragraph
-            # More robust clearing might iterate through paragraphs and clear runs if needed
-            cell.text = "" # Clear text, this might remove paragraphs other than the first
+                    # Validate row index
+                    if not (1 <= row_index <= len(table.rows)):
+                        fail_count += 1
+                        msg = f"Row index {row_index} is out of range (1 to {len(table.rows)}) for table {table_index}."
+                        error_messages.append(f"Cell ({row_index},{col_index}): {msg}")
+                        logger.warning(f"Skipping cell ({row_index},{col_index}): {msg}")
+                        continue
+                    row = table.rows[row_index - 1]
 
-            # Ensure there is at least one paragraph to add the run to
-            if not cell.paragraphs:
-                 cell.add_paragraph("") # Add an empty paragraph if cleared completely
-            target_para_in_cell = cell.paragraphs[0]
+                    # Validate column index
+                    if not (1 <= col_index <= len(row.cells)):
+                        fail_count += 1
+                        msg = f"Column index {col_index} is out of range (1 to {len(row.cells)}) for table {table_index}, row {row_index}."
+                        error_messages.append(f"Cell ({row_index},{col_index}): {msg}")
+                        logger.warning(f"Skipping cell ({row_index},{col_index}): {msg}")
+                        continue
+                    cell = row.cells[col_index - 1]
 
-            # Add new text as a run
-            new_run = target_para_in_cell.add_run(new_text)
+                    # --- Try to preserve formatting --- START
+                    original_font = None
+                    if cell.paragraphs and cell.paragraphs[0].runs:
+                        original_font = cell.paragraphs[0].runs[0].font
+                    # --- Try to preserve formatting --- END
 
-            # --- Apply preserved formatting --- START
-            if original_font:
-                new_run.font.name = original_font.name
-                new_run.font.size = original_font.size
-                new_run.font.bold = original_font.bold
-                new_run.font.italic = original_font.italic
-                new_run.font.underline = original_font.underline
-                new_run.font.color.rgb = original_font.color.rgb
-                # Copy other relevant font attributes if necessary
-            # --- Apply preserved formatting --- END
+                    # Clear cell and add new text with preserved formatting
+                    cell.text = "" # Clear text
+                    if not cell.paragraphs:
+                        cell.add_paragraph("")
+                    target_para_in_cell = cell.paragraphs[0]
+                    new_run = target_para_in_cell.add_run(new_text)
+
+                    if original_font:
+                        new_run.font.name = original_font.name
+                        new_run.font.size = original_font.size
+                        new_run.font.bold = original_font.bold
+                        new_run.font.italic = original_font.italic
+                        new_run.font.underline = original_font.underline
+                        new_run.font.color.rgb = original_font.color.rgb
+                    # --- Apply preserved formatting --- END
+
+                    success_count += 1
+                    logger.debug(f"Successfully modified cell ({row_index}, {col_index}) in table {table_index}.")
+
+                except (ValueError, TypeError) as idx_e:
+                    fail_count += 1
+                    msg = f"Invalid index type for cell ({mod_info.get('row_index', '?')},{mod_info.get('col_index', '?')}): {idx_e}"
+                    error_messages.append(msg)
+                    logger.warning(f"Skipping modification due to error: {msg}")
+                except Exception as cell_e:
+                    fail_count += 1
+                    row_val = mod_info.get('row_index', '?')
+                    col_val = mod_info.get('col_index', '?')
+                    msg = f"Error modifying cell ({row_val}, {col_val}): {cell_e}"
+                    error_messages.append(msg)
+                    logger.exception(f"Error modifying cell ({row_val}, {col_val}): {cell_e}")
+
 
             document.save(file_path)
-            logger.info(f"Successfully modified cell ({row_index}, {col_index}) in table {table_index} in '{file_path}', attempted style preservation.")
-            return f"Successfully modified cell at Table {table_index}, Row {row_index}, Col {col_index} to '{new_text}' in '{file_path}', attempted style preservation."
+
+            # Construct summary message
+            summary = f"Batch modification for table {table_index} in '{file_path}' completed. "
+            summary += f"Successfully modified {success_count} cell(s)."
+            if fail_count > 0:
+                summary += f" Failed to modify {fail_count} cell(s)."
+                if error_messages:
+                    summary += " Errors: " + "; ".join(list(set(error_messages[:3]))) # Show first few unique errors
+                    if len(error_messages) > 3:
+                         summary += "..."
+            logger.info(summary)
+            return summary
 
         except Exception as e:
-            logger.exception(f"Error modifying table cell in Word document '{file_path}': {e}")
-            return f"Error modifying table cell in Word document '{file_path}': {e}"
+            logger.exception(f"Critical error during batch cell modification in Word document '{file_path}': {e}")
+            return f"An error occurred during the batch table cell modification process in '{file_path}': {e}"
 
 class ApplyRunFormattingTool(Tool):
     """Applies formatting to specific text runs within a paragraph."""
@@ -1499,25 +1548,7 @@ class DeleteTableTool(Tool):
 
 if __name__ == '__main__':
     test_file_path = '/Users/xianlindeng/Downloads/乐农〔2025〕69号关于开展2024年度农业"两品"认定奖励申报工作的通知.docx'
-    # test_file_path_new = '/Users/xianlindeng/Downloads/test_document_created.docx'
-    # test_file_path_modify = '/Users/xianlindeng/Downloads/test_document_modify.docx'
-    # test_file_path_table = '/Users/xianlindeng/Downloads/test_document_table.docx'
-    # print("--- Testing Create ---")
-    # print(CreateWordTool().execute(test_file_path_new))
 
-    # print("\n--- Testing Add Paragraph (Existing File) ---")
-    # # Create a file first if it doesn't exist for modification tests
-    # if not os.path.exists(test_file_path_modify):
-    #     CreateWordTool().execute(test_file_path_modify)
-    # print(AddParagraphTool().execute(test_file_path_modify, "This is the first paragraph added.", style="Heading 1"))
-    # print(AddParagraphTool().execute(test_file_path_modify, "This is the second paragraph, with default style."))
-    # print(AddParagraphTool().execute(test_file_path_modify, "This paragraph tries an invalid style.", style="NonExistentStyle"))
-
-    # print("\n--- Testing Add Table (Existing File) ---")
-    # if not os.path.exists(test_file_path_table):
-    #      CreateWordTool().execute(test_file_path_table)
-    # print(AddTableTool().execute(test_file_path_table, rows=3, cols=4, style="Table Grid", header_row=["ID", "Name", "Value", "Status"]))
-    # print(AddTableTool().execute(test_file_path_table, rows=2, cols=2)) # Add another table without style/header
 
     print("\n--- Testing Read (Original File) ---")
     # Check if the original file exists before trying to open it
@@ -1528,52 +1559,3 @@ if __name__ == '__main__':
     else:
         print(f"Error: Test file not found at '{test_file_path}'")
         print("Please ensure the test file exists or update the path in the script.")
-
-# Update __main__ block for testing (Optional - commented out for safety)
-# if __name__ == '__main__':
-#     # Example Usage (requires test files in Downloads or adjust paths)
-#     base_path = os.path.expanduser("~/Downloads")
-#     create_path = os.path.join(base_path, "mrai_test_created.docx")
-#     para_path = os.path.join(base_path, "mrai_test_paragraphs.docx")
-#     table_path = os.path.join(base_path, "mrai_test_tables.docx")
-#     read_path = os.path.join(base_path, "乐农〔2025〕69号关于开展2024年度农业"两品"认定奖励申报工作的通知.docx") # Example existing file
-
-#     # Test Create
-#     print("--- Testing Create ---")
-#     creator = CreateWordTool()
-#     print(creator.execute(create_path))
-#     # Clean up created file
-#     # if os.path.exists(create_path): os.remove(create_path)
-
-#     # Test Add Paragraph
-#     print("\n--- Testing Add Paragraph ---")
-#     # Ensure file exists for adding paragraphs
-#     if not os.path.exists(para_path):
-#         creator.execute(para_path) # Create it first
-#     para_adder = AddParagraphTool()
-#     print(para_adder.execute(para_path, "First Paragraph - Heading 1", style="Heading 1"))
-#     print(para_adder.execute(para_path, "Second Paragraph - Normal Style"))
-#     print(para_adder.execute(para_path, "Third Paragraph - Invalid Style", style="FakeStyle123"))
-
-#     # Test Add Table
-#     print("\n--- Testing Add Table ---")
-#      # Ensure file exists for adding tables
-#     if not os.path.exists(table_path):
-#         creator.execute(table_path) # Create it first
-#     table_adder = AddTableTool()
-#     print(table_adder.execute(table_path, rows=4, cols=3, style="Light Shading Accent 1", header_row=["Col A", "Col B", "Col C"]))
-#     print(table_adder.execute(table_path, rows=2, cols=2)) # Add a default styled table
-
-#     # Test Read (use an existing file or one just created/modified)
-#     print("\n--- Testing Read ---")
-#     reader = ReadWordTool()
-#     # Try reading the table file we just modified
-#     if os.path.exists(table_path):
-#         print(f"\nReading: {table_path}")
-#         print(reader.execute(table_path))
-#     # Try reading the original example file if it exists
-#     elif os.path.exists(read_path):
-#         print(f"\nReading: {read_path}")
-#         print(reader.execute(read_path))
-#     else:
-#         print(f"\nSkipping Read test - Neither '{table_path}' nor '{read_path}' found.")
