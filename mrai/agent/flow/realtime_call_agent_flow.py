@@ -1,23 +1,42 @@
+from abc import ABC, abstractmethod
 import json
 import re
-from typing import AsyncIterator, Callable
+from typing import AsyncIterator, Callable, Literal
 from mrai.agent.agent import Agent, RealtimeCallAgent
 from mrai.agent.flow.base_flow import BaseFlow
 from mrai.agent.schema import FlowInput, Memory, Message
 from loguru import logger
 
 
+class MemoryOrganizer(ABC):
+    
+    @abstractmethod
+    async def organize(self, content_cache: str, observation: dict, memory: dict, flow_input: str):
+        pass
+
+
 class RealtimeCallAgentFlow(BaseFlow):
     
     memory: dict
     
-    def __init__(self, agents: dict[str, Agent], organize_memory: Callable[[str, dict, dict], dict]):
+    def __init__(
+        self, agents: dict[str, Agent],
+        memory_organizer: MemoryOrganizer,
+        tool_call: bool = True,
+        memory_build_type: Literal["auto", "manual"] = "auto"
+    ):
         self.memory = {}
-        self.organize_memory = organize_memory
+        self.memory_organizer = memory_organizer
         super().__init__(agents)
         # realtime call agent flow can not assign agent to other agents
         for agent in agents.values():
             agent.tools = [tool for tool in agent.tools if tool.name != "assign_agent"]
+        if not tool_call:
+            # if tool_call is False, remove all tools from all agents, including terminate tool
+            for agent in agents.values():
+                agent.tools = []
+        
+        self.memory_build_type = memory_build_type
 
     async def run(self, flow_input: FlowInput):
         valid_input = flow_input.get_valid_input()
@@ -73,34 +92,48 @@ class RealtimeCallAgentFlow(BaseFlow):
                 }
                 break
             
-        self.organize_memory(content_cache, observation, self.memory)
+        terminate = await self.memory_organizer.organize(content_cache, observation, self.memory, agent.user_input)
+        if terminate == True:
+            return
         await self.rebuild_memory(agent)
         await self.step(agent)
         
     async def rebuild_memory(self, agent: RealtimeCallAgent):
         """
         Based on the developer's reorganized Memory, construct prompts for the large model.
+        Special keys:
+            - system_prompt: The system prompt will be added to the beginning of the prompt.
         """
-        copy_memory = self.memory.copy()
+        new_system_prompt = ""
         new_memory = Memory()
-        sections = []
-        if agent.prompt:
-            sections.append(agent.prompt)
-        if copy_memory.get("system_prompt"):
-            sections.append(copy_memory.get("system_prompt"))
-        if agent.user_input:
-            sections.append(f"<user_input>{agent.user_input}</user_input>")
-        for key, value in copy_memory.items():
-            if key == "system_prompt" or key == "user_input":
-                continue
-            if isinstance(value, str):
-                sections.append(f"<{key}>{value}</{key}>")
-            elif isinstance(value, dict | list):
-                sections.append(f"<{key}>{json.dumps(value, ensure_ascii=False, indent=2)}</{key}>")
-            else:
-                sections.append(f"<{key}>{str(value)}</{key}>")
-        
-        new_system_prompt = "\n\n".join(sections)
+        copy_memory = self.memory.copy()
+        if self.memory_build_type == "auto":
+            sections = []
+            if agent.prompt:
+                sections.append(agent.prompt)
+            if copy_memory.get("system_prompt"):
+                sections.append(copy_memory.get("system_prompt"))
+            if agent.user_input:
+                sections.append(f"<user_input>{agent.user_input}</user_input>")
+            for key, value in copy_memory.items():
+                if key == "system_prompt" or key == "user_input":
+                    continue
+                if isinstance(value, str):
+                    sections.append(f"<{key}>{value}</{key}>")
+                elif isinstance(value, dict | list):
+                    sections.append(f"<{key}>{json.dumps(value, ensure_ascii=False, indent=2)}</{key}>")
+                else:
+                    sections.append(f"<{key}>{str(value)}</{key}>")
+            
+            new_system_prompt = "\n\n".join(sections)
+        elif self.memory_build_type == "manual":
+            sections = []
+            if agent.prompt:
+                sections.append(agent.prompt)
+            if copy_memory.get("system_prompt"):
+                sections.append(copy_memory.get("system_prompt"))
+            new_system_prompt = "\n\n".join(sections)
+                
         new_memory.add_message(
             Message(
                 role="system",
