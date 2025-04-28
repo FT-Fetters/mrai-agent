@@ -24,6 +24,4 @@ TOOL_CALL_RULE = \
 ### Tools
 
 {tools}
-
-
 """
